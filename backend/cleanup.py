@@ -27,8 +27,8 @@ def clean_fe_file(filepath):
     for i, line in enumerate(lines):
         if line.strip() == 'import pandas as pd':
             if i + 1 < len(lines) and lines[i+1].strip() == 'import pandas_ta as ta':
-                 start_index = i
-                 break # Take the first match of the clean block
+                start_index = i
+                break # Take the first match of the clean block
 
     if start_index != -1:
         with open(filepath, 'w', encoding='utf-8') as f:

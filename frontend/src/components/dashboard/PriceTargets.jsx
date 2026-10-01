@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { TrendingUp, TrendingDown, Target, AlertCircle, Shield, Activity, Zap } from 'lucide-react';
 import { Card, Button, LoadingSpinner } from '../ui';
 import { fetchPriceTarget } from '../../services/api';
+import BeginnerRiskSummary from './BeginnerRiskSummary';
 
 export const PriceTargets = ({ ticker }) => {
     const [target, setTarget] = useState(null);
@@ -126,6 +127,9 @@ export const PriceTargets = ({ ticker }) => {
                     {refreshing ? 'Refreshing...' : 'Refresh Targets'}
                 </Button>
             </Card>
+
+            {/* Beginner Risk Summary */}
+            <BeginnerRiskSummary ticker={ticker} />
 
             {/* v33: Market Regime & Momentum */}
             {(regime?.regimes_available || momentum?.active) && (

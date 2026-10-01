@@ -7,6 +7,22 @@
             "quantity": 120.0,
             "price": 404.0,
             "date": "2026-04-08"
+        },
+        {
+            "id": "1781940820146",
+            "ticker": "WAAREEENER",
+            "type": "BUY",
+            "quantity": 19.0,
+            "price": 1959.32,
+            "date": "2026-06-20"
+        },
+        {
+            "id": "1781941366844",
+            "ticker": "IRFC",
+            "type": "BUY",
+            "quantity": 250.0,
+            "price": 137.5,
+            "date": "2026-06-20"
         }
     ],
     "holdings": {
@@ -15,6 +31,18 @@
             "quantity": 120.0,
             "avg_price": 404.0,
             "total_cost": 48480.0
+        },
+        "WAAREEENER": {
+            "ticker": "WAAREEENER",
+            "quantity": 19.0,
+            "avg_price": 1959.32,
+            "total_cost": 37227.08
+        },
+        "IRFC": {
+            "ticker": "IRFC",
+            "quantity": 250.0,
+            "avg_price": 137.5,
+            "total_cost": 34375.0
         }
     }
 }

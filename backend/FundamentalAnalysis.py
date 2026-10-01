@@ -307,72 +307,87 @@ class FundamentalAnalyzer:
             score = 0
             details = {}
 
+            # Attempt to extract YoY history
+            has_history = len(bs.columns) >= 2 and len(is_.columns) >= 2 and len(cf.columns) >= 2
+            
+            def get_val(df, keys, col_idx, default=0):
+                for k in keys:
+                    if k in df.index:
+                        return df.loc[k].iloc[col_idx]
+                return default
+
+            # Current & Prev Assets
+            curr_assets = get_val(bs, ["Total Assets", "TotalAssets"], 0, info.get("totalAssets", 1) or 1)
+            prev_assets = get_val(bs, ["Total Assets", "TotalAssets"], 1, curr_assets) if has_history else curr_assets
+            
+            # Current & Prev Net Income
+            curr_ni = get_val(is_, ["Net Income", "NetIncome"], 0, info.get("netIncomeToCommon", 0) or 0)
+            prev_ni = get_val(is_, ["Net Income", "NetIncome"], 1, curr_ni) if has_history else curr_ni
+
+            curr_roa = curr_ni / curr_assets if curr_assets else 0
+            prev_roa = prev_ni / prev_assets if prev_assets else 0
+            
+            curr_ocf = get_val(cf, ["Operating Cash Flow", "TotalCashFromOperatingActivities"], 0, info.get("operatingCashflow", 0) or 0)
+
             # 1. Positive ROA
-            roa = info.get("returnOnAssets", 0) or 0
-            if roa > 0:
-                score += 1
-                details["positive_roa"] = True
-            else:
-                details["positive_roa"] = False
+            details["positive_roa"] = curr_roa > 0
+            if curr_roa > 0: score += 1
 
             # 2. Positive operating cash flow
-            ocf = info.get("operatingCashflow", 0) or 0
-            if ocf > 0:
-                score += 1
-                details["positive_ocf"] = True
-            else:
-                details["positive_ocf"] = False
+            details["positive_ocf"] = curr_ocf > 0
+            if curr_ocf > 0: score += 1
 
-            # 3. Increasing ROA (compare current vs prior year if available)
-            details["increasing_roa"] = roa > 0  # Simplified
-            if roa > 0:
+            # 3. Increasing ROA
+            details["increasing_roa"] = curr_roa > prev_roa
+            if curr_roa > prev_roa or (not has_history and curr_roa > 0.05):
                 score += 1
 
             # 4. Accruals: CFO > Net Income
-            net_income = info.get("netIncomeToCommon", 0) or 0
-            if ocf > net_income:
-                score += 1
-                details["quality_earnings"] = True
-            else:
-                details["quality_earnings"] = False
+            details["quality_earnings"] = curr_ocf > curr_ni
+            if curr_ocf > curr_ni: score += 1
 
-            # 5. Decreasing leverage (debt/equity)
-            de = info.get("debtToEquity", 100) or 100
-            if de < 100:
-                score += 1
-                details["low_leverage"] = True
-            else:
-                details["low_leverage"] = False
+            # 5. Decreasing leverage
+            curr_debt = get_val(bs, ["Total Debt", "Long Term Debt"], 0, info.get("totalDebt", 0) or 0)
+            prev_debt = get_val(bs, ["Total Debt", "Long Term Debt"], 1, curr_debt) if has_history else curr_debt
+            details["decreasing_leverage"] = curr_debt < prev_debt
+            if curr_debt < prev_debt or curr_debt == 0: score += 1
 
-            # 6. Liquidity: current ratio > 1
-            cr = info.get("currentRatio", 0) or 0
-            if cr > 1:
-                score += 1
-                details["adequate_liquidity"] = True
-            else:
-                details["adequate_liquidity"] = False
+            # 6. Increasing Liquidity (Current Ratio)
+            curr_ca = get_val(bs, ["Total Current Assets", "CurrentAssets"], 0, 0)
+            curr_cl = get_val(bs, ["Total Current Liabilities", "CurrentLiabilities"], 0, 1)
+            prev_ca = get_val(bs, ["Total Current Assets", "CurrentAssets"], 1, 0) if has_history else curr_ca
+            prev_cl = get_val(bs, ["Total Current Liabilities", "CurrentLiabilities"], 1, 1) if has_history else curr_cl
+            
+            curr_cr = curr_ca / curr_cl if curr_cl else (info.get("currentRatio", 0) or 0)
+            prev_cr = prev_ca / prev_cl if prev_cl else curr_cr
+            
+            details["increasing_liquidity"] = curr_cr > prev_cr
+            if curr_cr > prev_cr or (not has_history and curr_cr > 1.5): score += 1
 
-            # 7. No dilution (shares outstanding)
-            details["no_dilution"] = True  # Assume no dilution if no data
-            score += 1
+            # 7. No dilution
+            curr_shares = get_val(bs, ["Ordinary Shares Number", "CommonStockSharesOutstanding"], 0, info.get("sharesOutstanding", 0) or 0)
+            prev_shares = get_val(bs, ["Ordinary Shares Number", "CommonStockSharesOutstanding"], 1, curr_shares) if has_history else curr_shares
+            details["no_dilution"] = curr_shares <= prev_shares
+            if curr_shares <= prev_shares and curr_shares > 0: score += 1
 
             # 8. Gross margin improvement
-            gm = info.get("grossMargins", 0) or 0
-            if gm > 0.2:
-                score += 1
-                details["good_margin"] = True
-            else:
-                details["good_margin"] = False
+            curr_gp = get_val(is_, ["Gross Profit", "GrossProfit"], 0, 0)
+            curr_rev = get_val(is_, ["Total Revenue", "TotalRevenue"], 0, 1)
+            prev_gp = get_val(is_, ["Gross Profit", "GrossProfit"], 1, 0) if has_history else curr_gp
+            prev_rev = get_val(is_, ["Total Revenue", "TotalRevenue"], 1, 1) if has_history else curr_rev
+            
+            curr_gm = curr_gp / curr_rev if curr_rev else (info.get("grossMargins", 0) or 0)
+            prev_gm = prev_gp / prev_rev if prev_rev else curr_gm
+            
+            details["increasing_margin"] = curr_gm > prev_gm
+            if curr_gm > prev_gm or (not has_history and curr_gm > 0.3): score += 1
 
-            # 9. Asset turnover
-            rev = info.get("totalRevenue", 0) or 0
-            assets = info.get("totalAssets") or info.get("marketCap", 1) or 1
-            turnover = rev / assets if assets > 0 else 0
-            if turnover > 0.5:
-                score += 1
-                details["good_turnover"] = True
-            else:
-                details["good_turnover"] = False
+            # 9. Asset turnover improvement
+            curr_turnover = curr_rev / curr_assets if curr_assets else 0
+            prev_turnover = prev_rev / prev_assets if prev_assets else curr_turnover
+            
+            details["increasing_turnover"] = curr_turnover > prev_turnover
+            if curr_turnover > prev_turnover or (not has_history and curr_turnover > 0.5): score += 1
 
             # Classification
             if score >= 7:

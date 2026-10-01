@@ -61,7 +61,7 @@ class TestSMAStrategy(Strategy):
                 'type': 'MARKET'
             }
         elif bar['close'] > 150 and self.position > 0:
-             return {
+            return {
                 'action': 'SELL',
                 'quantity': 10,
                 'type': 'MARKET'

@@ -70,6 +70,19 @@
       "rr_ratio": 2.24,
       "actual_price": null,
       "accurate": null
+    },
+    {
+      "timestamp": "2026-09-24T12:46:57.738530",
+      "predicted_price": null,
+      "current_price": 1228.3,
+      "signal": "HOLD",
+      "confidence": 6.1,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
     }
   ],
   "AAREYDRUGS": [
@@ -315,6 +328,19 @@
       "rr_ratio": 1.25,
       "actual_price": null,
       "accurate": null
+    },
+    {
+      "timestamp": "2026-08-27T13:07:16.223801",
+      "predicted_price": 280.54,
+      "current_price": 280.3,
+      "signal": "HOLD",
+      "confidence": 9.2,
+      "buy_price": 279.57,
+      "target_price": 285.04,
+      "stoploss": 285.41,
+      "rr_ratio": 0.94,
+      "actual_price": null,
+      "accurate": null
     }
   ],
   "SENCO": [
@@ -388,6 +414,1279 @@
       "target_price": 465.64,
       "stoploss": 386.53,
       "rr_ratio": 1.02,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "CGPOWER": [
+    {
+      "timestamp": "2026-07-03T16:10:09.714840",
+      "predicted_price": null,
+      "current_price": 959.4,
+      "signal": "HOLD",
+      "confidence": 5.4,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-07-05T16:17:13.562273",
+      "predicted_price": null,
+      "current_price": 892.55,
+      "signal": "HOLD",
+      "confidence": 4.3,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-07-06T16:29:30.533547",
+      "predicted_price": null,
+      "current_price": 892.55,
+      "signal": "HOLD",
+      "confidence": 2.1,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-07-20T14:13:15.843942",
+      "predicted_price": null,
+      "current_price": 905.0,
+      "signal": "HOLD",
+      "confidence": 12.4,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-07-27T17:54:14.998040",
+      "predicted_price": null,
+      "current_price": 867.7,
+      "signal": "HOLD",
+      "confidence": 5.5,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-08-10T13:08:22.963518",
+      "predicted_price": null,
+      "current_price": 879.0,
+      "signal": "HOLD",
+      "confidence": 3.4,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-08-11T12:00:31.591003",
+      "predicted_price": "868.48",
+      "current_price": 879.0,
+      "signal": "HOLD",
+      "confidence": 6.7,
+      "buy_price": 881.66,
+      "target_price": 778.89,
+      "stoploss": 936.51,
+      "rr_ratio": 1.87,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-08-17T11:36:49.964406",
+      "predicted_price": 888.3,
+      "current_price": 886.55,
+      "signal": "HOLD",
+      "confidence": 2.3,
+      "buy_price": 886.55,
+      "target_price": 878.83,
+      "stoploss": 903.33,
+      "rr_ratio": 0.46,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-08-18T13:21:08.805312",
+      "predicted_price": 888.18,
+      "current_price": 886.55,
+      "signal": "HOLD",
+      "confidence": 1.3,
+      "buy_price": 886.55,
+      "target_price": 931.88,
+      "stoploss": 839.68,
+      "rr_ratio": 0.97,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-08-20T11:33:30.630732",
+      "predicted_price": 888.16,
+      "current_price": 886.55,
+      "signal": "HOLD",
+      "confidence": 16.8,
+      "buy_price": 886.55,
+      "target_price": 878.83,
+      "stoploss": 903.33,
+      "rr_ratio": 0.46,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-08-21T12:36:31.567160",
+      "predicted_price": 888.26,
+      "current_price": 886.55,
+      "signal": "HOLD",
+      "confidence": 3.3,
+      "buy_price": 886.55,
+      "target_price": 878.83,
+      "stoploss": 903.33,
+      "rr_ratio": 0.46,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-09T12:52:42.825786",
+      "predicted_price": null,
+      "current_price": 925.75,
+      "signal": "HOLD",
+      "confidence": 4.5,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-16T12:43:48.295898",
+      "predicted_price": null,
+      "current_price": 925.75,
+      "signal": "HOLD",
+      "confidence": 5.5,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-17T11:21:05.661530",
+      "predicted_price": null,
+      "current_price": 925.75,
+      "signal": "HOLD",
+      "confidence": 2.3,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-18T11:04:09.391504",
+      "predicted_price": null,
+      "current_price": 925.75,
+      "signal": "HOLD",
+      "confidence": 4.8,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-19T11:02:42.441249",
+      "predicted_price": null,
+      "current_price": 925.75,
+      "signal": "HOLD",
+      "confidence": 1.3,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-24T12:39:39.710965",
+      "predicted_price": 887.97,
+      "current_price": 890.5,
+      "signal": "HOLD",
+      "confidence": 15.2,
+      "buy_price": 888.24,
+      "target_price": 946.78,
+      "stoploss": 840.49,
+      "rr_ratio": 1.23,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-29T11:36:59.227663",
+      "predicted_price": null,
+      "current_price": 890.5,
+      "signal": "HOLD",
+      "confidence": 1.1,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "INFY": [
+    {
+      "timestamp": "2026-07-04T13:04:51.707976",
+      "predicted_price": null,
+      "current_price": 1047.2,
+      "signal": "HOLD",
+      "confidence": 2.1,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "SBIN": [
+    {
+      "timestamp": "2026-07-04T13:28:00.846791",
+      "predicted_price": null,
+      "current_price": 1040.0,
+      "signal": "HOLD",
+      "confidence": 1.8,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "RECLTD": [
+    {
+      "timestamp": "2026-07-04T13:28:00.933503",
+      "predicted_price": null,
+      "current_price": 365.15,
+      "signal": "HOLD",
+      "confidence": 1.9,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "YESBANK": [
+    {
+      "timestamp": "2026-07-04T13:28:00.940434",
+      "predicted_price": null,
+      "current_price": 24.39,
+      "signal": "HOLD",
+      "confidence": 1.1,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "NHPC": [
+    {
+      "timestamp": "2026-07-04T13:28:00.940434",
+      "predicted_price": null,
+      "current_price": 80.53,
+      "signal": "HOLD",
+      "confidence": 0.5,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "MAHABANK": [
+    {
+      "timestamp": "2026-07-04T13:28:00.940434",
+      "predicted_price": null,
+      "current_price": 88.53,
+      "signal": "HOLD",
+      "confidence": 4.5,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "UJJIVANSFB": [
+    {
+      "timestamp": "2026-07-04T13:28:00.964124",
+      "predicted_price": null,
+      "current_price": 59.6,
+      "signal": "HOLD",
+      "confidence": 4.0,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-08-13T11:21:31.510524",
+      "predicted_price": null,
+      "current_price": 72.38,
+      "signal": "HOLD",
+      "confidence": 4.9,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-08-13T11:30:49.063616",
+      "predicted_price": null,
+      "current_price": 72.38,
+      "signal": "HOLD",
+      "confidence": 4.9,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "JGCHEM": [
+    {
+      "timestamp": "2026-07-21T17:53:58.889404",
+      "predicted_price": null,
+      "current_price": 489.2,
+      "signal": "HOLD",
+      "confidence": 21.0,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "DYCL": [
+    {
+      "timestamp": "2026-07-21T17:53:58.889929",
+      "predicted_price": null,
+      "current_price": 445.65,
+      "signal": "HOLD",
+      "confidence": 26.7,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-07-22T10:52:45.452441",
+      "predicted_price": null,
+      "current_price": 445.65,
+      "signal": "HOLD",
+      "confidence": 26.6,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-07-22T11:14:00.096988",
+      "predicted_price": null,
+      "current_price": 445.65,
+      "signal": "HOLD",
+      "confidence": 27.2,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "BECTORFOOD": [
+    {
+      "timestamp": "2026-07-21T17:53:58.905228",
+      "predicted_price": null,
+      "current_price": 210.08,
+      "signal": "HOLD",
+      "confidence": 25.4,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "BEPL": [
+    {
+      "timestamp": "2026-07-21T17:53:58.955379",
+      "predicted_price": "128.39",
+      "current_price": 127.77,
+      "signal": "HOLD",
+      "confidence": 27.7,
+      "buy_price": 127.27,
+      "target_price": 137.96,
+      "stoploss": 117.75,
+      "rr_ratio": 1.12,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "IOLCP": [
+    {
+      "timestamp": "2026-07-21T17:53:58.962386",
+      "predicted_price": null,
+      "current_price": 155.43,
+      "signal": "HOLD",
+      "confidence": 12.6,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "JSFB": [
+    {
+      "timestamp": "2026-07-21T17:53:58.964758",
+      "predicted_price": null,
+      "current_price": 531.6,
+      "signal": "HOLD",
+      "confidence": 21.3,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "DPABHUSHAN": [
+    {
+      "timestamp": "2026-07-21T17:53:58.964758",
+      "predicted_price": null,
+      "current_price": 1434.35,
+      "signal": "HOLD",
+      "confidence": 21.6,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "ZEEL": [
+    {
+      "timestamp": "2026-07-22T10:52:45.079655",
+      "predicted_price": "107.51",
+      "current_price": 107.34,
+      "signal": "HOLD",
+      "confidence": 5.5,
+      "buy_price": 107.34,
+      "target_price": 118.21,
+      "stoploss": 98.64,
+      "rr_ratio": 1.25,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "CUPID": [
+    {
+      "timestamp": "2026-07-22T10:52:45.129366",
+      "predicted_price": null,
+      "current_price": 207.27,
+      "signal": "HOLD",
+      "confidence": 13.8,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-07-22T11:13:59.669760",
+      "predicted_price": null,
+      "current_price": 207.27,
+      "signal": "HOLD",
+      "confidence": 13.2,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-08-13T11:21:31.433672",
+      "predicted_price": null,
+      "current_price": 289.87,
+      "signal": "HOLD",
+      "confidence": 7.2,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-08-13T11:30:48.626327",
+      "predicted_price": null,
+      "current_price": 289.87,
+      "signal": "HOLD",
+      "confidence": 7.5,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-08-13T11:32:04.236859",
+      "predicted_price": null,
+      "current_price": 289.87,
+      "signal": "HOLD",
+      "confidence": 7.7,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "EICHERMOT": [
+    {
+      "timestamp": "2026-07-22T11:26:46.255659",
+      "predicted_price": null,
+      "current_price": 7563.5,
+      "signal": "HOLD",
+      "confidence": 15.6,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "TATAPOWER": [
+    {
+      "timestamp": "2026-07-27T15:00:09.797927",
+      "predicted_price": "372.25",
+      "current_price": 374.4,
+      "signal": "HOLD",
+      "confidence": 11.7,
+      "buy_price": 374.98,
+      "target_price": 350.28,
+      "stoploss": 387.31,
+      "rr_ratio": 2.0,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "PANAMAPET": [
+    {
+      "timestamp": "2026-08-13T11:21:31.499926",
+      "predicted_price": 481.99,
+      "current_price": 480.55,
+      "signal": "HOLD",
+      "confidence": 12.8,
+      "buy_price": 483.62,
+      "target_price": 382.55,
+      "stoploss": 545.12,
+      "rr_ratio": 1.64,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "MANAPPURAM": [
+    {
+      "timestamp": "2026-08-13T11:21:31.510524",
+      "predicted_price": 353.65,
+      "current_price": 352.6,
+      "signal": "HOLD",
+      "confidence": 8.0,
+      "buy_price": 352.6,
+      "target_price": 344.31,
+      "stoploss": 359.24,
+      "rr_ratio": 1.25,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-08-13T11:30:48.521583",
+      "predicted_price": 353.67,
+      "current_price": 352.6,
+      "signal": "HOLD",
+      "confidence": 3.8,
+      "buy_price": 352.6,
+      "target_price": 344.31,
+      "stoploss": 359.24,
+      "rr_ratio": 1.25,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-08-13T11:38:10.868422",
+      "predicted_price": 353.67,
+      "current_price": 352.6,
+      "signal": "HOLD",
+      "confidence": 5.7,
+      "buy_price": 352.6,
+      "target_price": 344.31,
+      "stoploss": 359.24,
+      "rr_ratio": 1.25,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "MOTHERSON": [
+    {
+      "timestamp": "2026-08-13T11:21:31.641716",
+      "predicted_price": 170.01,
+      "current_price": 169.5,
+      "signal": "HOLD",
+      "confidence": 4.3,
+      "buy_price": 169.5,
+      "target_price": 168.7,
+      "stoploss": 172.03,
+      "rr_ratio": 0.31,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-08-13T11:30:48.610516",
+      "predicted_price": 170.01,
+      "current_price": 169.5,
+      "signal": "HOLD",
+      "confidence": 0,
+      "buy_price": 169.5,
+      "target_price": 168.7,
+      "stoploss": 172.03,
+      "rr_ratio": 0.31,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-09T12:34:46.072133",
+      "predicted_price": null,
+      "current_price": 163.3,
+      "signal": "HOLD",
+      "confidence": 8.3,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-09T12:43:38.844773",
+      "predicted_price": null,
+      "current_price": 163.3,
+      "signal": "HOLD",
+      "confidence": 3.8,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-09T12:49:57.768907",
+      "predicted_price": null,
+      "current_price": 163.3,
+      "signal": "HOLD",
+      "confidence": 7.4,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-09T12:55:21.346179",
+      "predicted_price": null,
+      "current_price": 163.3,
+      "signal": "HOLD",
+      "confidence": 9.4,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-09T13:23:53.759831",
+      "predicted_price": null,
+      "current_price": 163.3,
+      "signal": "HOLD",
+      "confidence": 8.1,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-26T11:53:31.878518",
+      "predicted_price": null,
+      "current_price": 165.71,
+      "signal": "HOLD",
+      "confidence": 5.3,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "IDFCFIRSTB": [
+    {
+      "timestamp": "2026-08-13T11:30:48.619136",
+      "predicted_price": null,
+      "current_price": 85.8,
+      "signal": "HOLD",
+      "confidence": 9.3,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-09T12:34:46.480441",
+      "predicted_price": null,
+      "current_price": 86.37,
+      "signal": "HOLD",
+      "confidence": 2.6,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "ITDC": [
+    {
+      "timestamp": "2026-08-13T11:40:32.356944",
+      "predicted_price": 723.29,
+      "current_price": 721.05,
+      "signal": "HOLD",
+      "confidence": 0.4,
+      "buy_price": 721.05,
+      "target_price": 691.03,
+      "stoploss": 745.07,
+      "rr_ratio": 1.25,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "ARIES": [
+    {
+      "timestamp": "2026-08-13T11:40:32.411706",
+      "predicted_price": null,
+      "current_price": 397.35,
+      "signal": "HOLD",
+      "confidence": 5.7,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "KANPRPLA": [
+    {
+      "timestamp": "2026-08-13T11:40:32.422049",
+      "predicted_price": null,
+      "current_price": 255.69,
+      "signal": "HOLD",
+      "confidence": 8.4,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "DOLPHIN": [
+    {
+      "timestamp": "2026-08-13T11:40:32.429243",
+      "predicted_price": null,
+      "current_price": 494.35,
+      "signal": "HOLD",
+      "confidence": 5.5,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-08-13T11:41:46.989801",
+      "predicted_price": null,
+      "current_price": 494.35,
+      "signal": "HOLD",
+      "confidence": 6.5,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "BBOX": [
+    {
+      "timestamp": "2026-08-13T11:40:32.430753",
+      "predicted_price": null,
+      "current_price": 833.36,
+      "signal": "HOLD",
+      "confidence": 2.9,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-08-20T12:26:57.864228",
+      "predicted_price": 834.0,
+      "current_price": 832.5,
+      "signal": "HOLD",
+      "confidence": 9.1,
+      "buy_price": 832.5,
+      "target_price": 813.03,
+      "stoploss": 855.62,
+      "rr_ratio": 0.84,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "APARINDS": [
+    {
+      "timestamp": "2026-08-13T11:40:32.841883",
+      "predicted_price": null,
+      "current_price": 18000.0,
+      "signal": "HOLD",
+      "confidence": 5.9,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "HUBTOWN": [
+    {
+      "timestamp": "2026-08-20T12:26:56.643253",
+      "predicted_price": 190.05,
+      "current_price": 189.71,
+      "signal": "HOLD",
+      "confidence": 12.0,
+      "buy_price": 189.07,
+      "target_price": 198.58,
+      "stoploss": 192.48,
+      "rr_ratio": 2.79,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "AZAD": [
+    {
+      "timestamp": "2026-08-20T12:26:56.653275",
+      "predicted_price": 2669.9,
+      "current_price": 2665.1,
+      "signal": "HOLD",
+      "confidence": 9.2,
+      "buy_price": 2655.67,
+      "target_price": 2642.56,
+      "stoploss": 2703.51,
+      "rr_ratio": 0.27,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "ASTRAL": [
+    {
+      "timestamp": "2026-08-20T12:26:56.653275",
+      "predicted_price": null,
+      "current_price": 1592.0,
+      "signal": "HOLD",
+      "confidence": 3.8,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "JAIBALAJI": [
+    {
+      "timestamp": "2026-08-20T12:26:56.711756",
+      "predicted_price": 68.99,
+      "current_price": 68.87,
+      "signal": "HOLD",
+      "confidence": 13.9,
+      "buy_price": 68.59,
+      "target_price": 73.67,
+      "stoploss": 71.27,
+      "rr_ratio": 1.89,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "EDELWEISS": [
+    {
+      "timestamp": "2026-08-20T12:26:56.712479",
+      "predicted_price": null,
+      "current_price": 124.88,
+      "signal": "HOLD",
+      "confidence": 10.0,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-09T12:04:32.535362",
+      "predicted_price": null,
+      "current_price": 135.47,
+      "signal": "HOLD",
+      "confidence": 6.7,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "GPIL": [
+    {
+      "timestamp": "2026-08-20T12:26:56.722350",
+      "predicted_price": 243.75,
+      "current_price": 243.31,
+      "signal": "HOLD",
+      "confidence": 11.0,
+      "buy_price": 244.12,
+      "target_price": 231.77,
+      "stoploss": 259.99,
+      "rr_ratio": 0.78,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "FINCABLES": [
+    {
+      "timestamp": "2026-09-09T12:04:32.451789",
+      "predicted_price": null,
+      "current_price": 1302.3,
+      "signal": "HOLD",
+      "confidence": 9.2,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "IFCI": [
+    {
+      "timestamp": "2026-09-09T12:04:32.537369",
+      "predicted_price": null,
+      "current_price": 98.32,
+      "signal": "HOLD",
+      "confidence": 9.6,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "HIKAL": [
+    {
+      "timestamp": "2026-09-09T12:04:32.938056",
+      "predicted_price": null,
+      "current_price": 243.0,
+      "signal": "HOLD",
+      "confidence": 0.1,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-09T12:37:27.205540",
+      "predicted_price": null,
+      "current_price": 243.0,
+      "signal": "HOLD",
+      "confidence": 0.1,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "SOTL": [
+    {
+      "timestamp": "2026-09-09T12:34:46.067037",
+      "predicted_price": null,
+      "current_price": 771.4,
+      "signal": "HOLD",
+      "confidence": 4.6,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-09T12:43:38.439999",
+      "predicted_price": null,
+      "current_price": 771.4,
+      "signal": "HOLD",
+      "confidence": 0.5,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-09T12:49:57.335147",
+      "predicted_price": null,
+      "current_price": 771.4,
+      "signal": "HOLD",
+      "confidence": 4.1,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-09T12:55:21.323017",
+      "predicted_price": null,
+      "current_price": 771.4,
+      "signal": "HOLD",
+      "confidence": 8.2,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-09T13:13:16.258043",
+      "predicted_price": null,
+      "current_price": 771.4,
+      "signal": "HOLD",
+      "confidence": 5.3,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "ETERNAL": [
+    {
+      "timestamp": "2026-09-09T12:37:26.750646",
+      "predicted_price": null,
+      "current_price": 320.15,
+      "signal": "HOLD",
+      "confidence": 3.8,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "MOTISONS": [
+    {
+      "timestamp": "2026-09-09T12:37:26.803375",
+      "predicted_price": 16.46,
+      "current_price": 16.44,
+      "signal": "HOLD",
+      "confidence": 14.3,
+      "buy_price": 16.36,
+      "target_price": 15.75,
+      "stoploss": 16.95,
+      "rr_ratio": 1.03,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "ICICIBANK": [
+    {
+      "timestamp": "2026-09-09T12:43:39.751972",
+      "predicted_price": null,
+      "current_price": 1399.2,
+      "signal": "HOLD",
+      "confidence": 2.8,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "PAISALO": [
+    {
+      "timestamp": "2026-09-09T12:49:57.299152",
+      "predicted_price": null,
+      "current_price": 80.28,
+      "signal": "HOLD",
+      "confidence": 1.1,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-09T12:55:21.329175",
+      "predicted_price": null,
+      "current_price": 80.28,
+      "signal": "HOLD",
+      "confidence": 1.1,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-09T13:23:53.759831",
+      "predicted_price": null,
+      "current_price": 80.28,
+      "signal": "HOLD",
+      "confidence": 1.3,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    },
+    {
+      "timestamp": "2026-09-26T11:53:30.233303",
+      "predicted_price": null,
+      "current_price": 89.51,
+      "signal": "HOLD",
+      "confidence": 0.5,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "SBC": [
+    {
+      "timestamp": "2026-09-09T12:49:57.347881",
+      "predicted_price": 48.77,
+      "current_price": 48.72,
+      "signal": "HOLD",
+      "confidence": 13.0,
+      "buy_price": 48.6,
+      "target_price": 48.55,
+      "stoploss": 49.45,
+      "rr_ratio": 0.06,
+      "actual_price": null,
+      "accurate": null
+    }
+  ],
+  "IBULLSLTD": [
+    {
+      "timestamp": "2026-09-26T11:53:30.179059",
+      "predicted_price": null,
+      "current_price": 29.65,
+      "signal": "HOLD",
+      "confidence": 6.2,
+      "buy_price": null,
+      "target_price": null,
+      "stoploss": null,
+      "rr_ratio": null,
       "actual_price": null,
       "accurate": null
     }

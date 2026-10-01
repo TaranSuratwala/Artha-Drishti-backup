@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, TrendingUp, TrendingDown, PieChart, Trash2, ArrowUpRight, ArrowDownRight, Activity, Newspaper, ExternalLink, RefreshCw } from 'lucide-react';
+import { Plus, TrendingUp, TrendingDown, PieChart, Trash2, ArrowUpRight, ArrowDownRight, Activity, Newspaper, ExternalLink, RefreshCw, ShieldAlert } from 'lucide-react';
 import { Card, Button, LoadingSpinner } from '../ui';
 import * as api from '../../services/api';
 import { formatINR, formatINRWithSign, formatPercent } from '../../utils/currencyUtils';
@@ -11,6 +11,10 @@ export const PortfolioDashboard = () => {
     const [news, setNews] = useState([]);
     const [newsLoading, setNewsLoading] = useState(false);
 
+    // Risk state
+    const [riskMetrics, setRiskMetrics] = useState(null);
+    const [riskLoading, setRiskLoading] = useState(false);
+
     // Form state
     const [formData, setFormData] = useState({
         ticker: '', type: 'BUY', quantity: '', price: '', date: new Date().toISOString().split('T')[0]
@@ -20,6 +24,32 @@ export const PortfolioDashboard = () => {
         loadPortfolio();
         loadNews();
     }, []);
+
+    useEffect(() => {
+        if (portfolio?.holdings?.length >= 2 && portfolio?.summary?.total_value > 0) {
+            loadRiskMetrics(portfolio.holdings, portfolio.summary.total_value);
+        } else {
+            setRiskMetrics(null);
+        }
+    }, [portfolio]);
+
+    const loadRiskMetrics = async (holdingsData, totalValue) => {
+        setRiskLoading(true);
+        try {
+            const weights = {};
+            holdingsData.forEach(h => {
+                weights[h.ticker] = h.market_value / totalValue;
+            });
+            const result = await api.analyzePortfolioRisk(weights, '1y');
+            if (result && !result.error) {
+                setRiskMetrics(result);
+            }
+        } catch (err) {
+            console.error('Failed to load portfolio risk metrics:', err);
+        } finally {
+            setRiskLoading(false);
+        }
+    };
 
     const loadPortfolio = async () => {
         try {
@@ -138,6 +168,32 @@ export const PortfolioDashboard = () => {
                 </Card>
             </div>
 
+            {/* Risk Metrics Summary */}
+            {riskMetrics && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <Card className="p-5 industry-section-card bg-orange-500/10 border-orange-500/20">
+                        <div className="flex justify-between items-center">
+                            <div>
+                                <div className="text-orange-300/80 text-sm font-medium mb-1 uppercase tracking-wider flex items-center gap-1.5">
+                                    <ShieldAlert className="w-4 h-4" /> Portfolio VaR (95%)
+                                </div>
+                                <div className="text-2xl font-black text-orange-400">
+                                    {riskMetrics.portfolio_var_95}%
+                                </div>
+                            </div>
+                            <div className="text-right">
+                                <div className="text-orange-300/80 text-sm font-medium mb-1 uppercase tracking-wider">
+                                    Div. Ratio
+                                </div>
+                                <div className="text-2xl font-black text-orange-400">
+                                    {riskMetrics.diversification_ratio}
+                                </div>
+                            </div>
+                        </div>
+                    </Card>
+                </div>
+            )}
+
             {/* Holdings Table */}
             <Card className="overflow-hidden border-white/10 industry-table-shell portfolio-holdings-card">
                 <div className="p-4 bg-white/5 border-b border-white/10 flex justify-between items-center portfolio-section-header">
@@ -158,6 +214,8 @@ export const PortfolioDashboard = () => {
                                 <th className="p-4 text-right">Current Price</th>
                                 <th className="p-4 text-right">Value</th>
                                 <th className="p-4 text-right">Unrealized P&L</th>
+                                {riskMetrics && <th className="p-4 text-right text-orange-300">Comp. VaR</th>}
+                                {riskMetrics && <th className="p-4 text-right text-orange-300">Marg. Risk</th>}
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-white/5">
@@ -174,11 +232,21 @@ export const PortfolioDashboard = () => {
                                             <span className="text-xs opacity-70">({h.pnl_pct}%)</span>
                                         </div>
                                     </td>
+                                    {riskMetrics && (
+                                        <td className="p-4 text-right font-mono text-orange-200/90">
+                                            {riskMetrics.component_var?.[h.ticker] ? `${(riskMetrics.component_var[h.ticker] * 100).toFixed(3)}%` : '-'}
+                                        </td>
+                                    )}
+                                    {riskMetrics && (
+                                        <td className="p-4 text-right font-mono text-orange-200/90">
+                                            {riskMetrics.marginal_risk_contribution?.[h.ticker] ? `${(riskMetrics.marginal_risk_contribution[h.ticker]).toFixed(4)}` : '-'}
+                                        </td>
+                                    )}
                                 </tr>
                             ))}
                             {(!holdings || holdings.length === 0) && (
                                 <tr>
-                                    <td colSpan="6" className="p-12 text-center text-gray-500">
+                                    <td colSpan={riskMetrics ? "8" : "6"} className="p-12 text-center text-gray-500">
                                         <div className="flex flex-col items-center gap-3">
                                             <div className="p-4 bg-white/5 rounded-full">
                                                 <PieChart className="w-8 h-8 opacity-50" />

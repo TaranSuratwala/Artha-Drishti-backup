@@ -19,10 +19,7 @@ class Config:
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=24)
     
     # Database Configuration
-    SQLALCHEMY_DATABASE_URI = os.getenv(
-        'DB_URL', 
-        'postgresql://postgres:Taran%4017@localhost:5432/StockDB'
-    )
+    SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL', "")
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ENGINE_OPTIONS = {
         'pool_pre_ping': True,
@@ -105,6 +102,25 @@ class Config:
     BACKUP_ENABLED = True
     BACKUP_DIR = os.getenv('BACKUP_DIR', 'backups')
     BACKUP_RETENTION_DAYS = 30
+    
+    # Agent Configuration
+    GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY', '')
+    AGENT_MODEL = os.getenv('AGENT_MODEL', 'gemini-3.6-flash')
+    AGENT_MAX_HISTORY = int(os.getenv('AGENT_MAX_HISTORY', '20'))
+    
+    # Broker Configuration
+    BROKER_TYPE = os.getenv('BROKER_TYPE', 'paper')  # paper | kite | angelone | upstox
+    BROKER_API_KEY = os.getenv('BROKER_API_KEY', '')
+    BROKER_API_SECRET = os.getenv('BROKER_API_SECRET', '')
+    BROKER_ACCESS_TOKEN = os.getenv('BROKER_ACCESS_TOKEN', '')
+    PAPER_TRADING_CAPITAL = float(os.getenv('PAPER_TRADING_CAPITAL', '1000000'))  # ₹10L
+    
+    # Risk Management Limits
+    MAX_ORDER_VALUE = float(os.getenv('MAX_ORDER_VALUE', '100000'))    # ₹1L per order
+    MAX_DAILY_LOSS = float(os.getenv('MAX_DAILY_LOSS', '10000'))       # ₹10K daily loss limit
+    MAX_POSITION_SIZE_PCT = float(os.getenv('MAX_POSITION_SIZE_PCT', '20'))  # 20% of capital
+    MAX_ORDERS_PER_DAY = int(os.getenv('MAX_ORDERS_PER_DAY', '20'))
+    REQUIRE_CONFIRMATION_ABOVE = float(os.getenv('REQUIRE_CONFIRMATION_ABOVE', '50000'))  # ₹50K
 
 
 class DevelopmentConfig(Config):

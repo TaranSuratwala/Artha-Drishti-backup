@@ -1641,6 +1641,23 @@ class StrategyLibrary:
                 "rationale": "Identifies stocks with strong upward momentum, healthy RSI, and volume confirmation"
             },
             
+            "ai_bullish_setup": {
+                "name": "AI High-Conviction Bullish",
+                "description": "Structurally bullish setup optimally designed to precede AI prediction scoring",
+                "strategy_type": "hybrid",
+                "category": "Momentum",
+                "risk_level": "Medium",
+                "holding_period": "1-6 months",
+                "conditions": [
+                    {"indicator": "rsi_14", "operator": ">", "value": 55, "weight": 1.5},
+                    {"indicator": "macd_hist", "operator": ">", "value": 0, "weight": 1.0},
+                    {"indicator": "close", "operator": ">", "value": "sma_50", "weight": 2.0},
+                    {"indicator": "close", "operator": ">", "value": "sma_200", "weight": 1.5},
+                    {"indicator": "volume_ratio_20", "operator": ">", "value": 1.2, "weight": 1.0}
+                ],
+                "rationale": "High probability structural uptrend - strong price above 50/200 SMAs with volume and momentum."
+            },
+            
             "mean_reversion": {
                 "name": "Mean Reversion",
                 "description": "Oversold stocks likely to bounce back to their mean",
@@ -1888,7 +1905,7 @@ class StrategyLibrary:
 class RateLimiter:
     """Rate limiter to prevent API throttling"""
     
-    def __init__(self, delay: float = 0.5):
+    def __init__(self, delay: float = 0.05):
         self.delay = delay
         self.last_request = 0
         self.lock = Lock()
@@ -2835,6 +2852,8 @@ class InteractiveStockScreener:
                         # Fallback to single fetch if missing
                         df = self._fetch_stock_data(ticker)
                         if df is None or df.empty: return None
+                        if len(df) > 200:
+                            df = df.tail(200)
                         tech_engine = TechnicalIndicatorEngine(df)
                         indicators = tech_engine.calculate_all_indicators().iloc[-1].to_dict()
                     
@@ -2959,6 +2978,8 @@ class InteractiveStockScreener:
                     if not indicators:
                         df = self._fetch_stock_data(ticker)
                         if df is None or df.empty: return None
+                        if len(df) > 200:
+                            df = df.tail(200)
                         tech_engine = TechnicalIndicatorEngine(df)
                         indicators = tech_engine.calculate_all_indicators().iloc[-1].to_dict()
                     
@@ -3952,7 +3973,10 @@ def interactive_demo():
     print("="*80 + "\n")
     
     from IntegratedPostGreSQL import NSEDataPipeline
-    DB_URL = "postgresql://postgres:Taran%4017@localhost:5432/StockDB"
+    DB_URL = os.getenv("DATABASE_URL", "")
+    if not DB_URL:
+        print("ERROR: DATABASE_URL environment variable not set")
+        sys.exit(1)
     
     pipeline = NSEDataPipeline(DB_URL)
     screener = InteractiveStockScreener(pipeline)
@@ -4037,7 +4061,7 @@ Endpoints:
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from IntegratedPostGreSQL import NSEDataPipeline, DB_URL
+from IntegratedPostGreSQL import NSEDataPipeline, Config
 import logging
 from functools import wraps
 import time
@@ -4053,7 +4077,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Initialize components
-pipeline = NSEDataPipeline(DB_URL)
+pipeline = NSEDataPipeline(Config.DB_URL)
 screener = InteractiveStockScreener(pipeline, cache_ttl=3600)
 
 # Request tracking for rate limiting

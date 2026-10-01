@@ -11,21 +11,23 @@ import { fetchMarketOverview } from '../../services/api';
  * market breadth, sectoral heatmap, and volume stats.
  * Auto-refreshes every 20 seconds.
  */
-export const MarketOverview = () => {
+export const MarketOverview = React.memo(() => {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState(null);
     const [lastUpdated, setLastUpdated] = useState(null);
 
+    const hasInitialLoaded = React.useRef(false);
     const load = useCallback(async () => {
         try {
-            if (!data) setLoading(true);
+            if (!hasInitialLoaded.current) setLoading(true);
             setRefreshing(true);
             setError(null);
             const res = await fetchMarketOverview();
             setData(res);
             setLastUpdated(new Date());
+            hasInitialLoaded.current = true;
         } catch (e) {
             console.error('Market overview fetch failed:', e);
             setError(e.message || 'Failed to load market data');
@@ -33,13 +35,13 @@ export const MarketOverview = () => {
             setLoading(false);
             setRefreshing(false);
         }
-    }, [data]);
+    }, []);
 
     useEffect(() => { load(); }, [load]);
 
-    // Auto-refresh every 20s
+    // Auto-refresh every 180s
     useEffect(() => {
-        const interval = setInterval(load, 20_000);
+        const interval = setInterval(load, 180_000);
         
         return () => clearInterval(interval);
     }, [load]);
@@ -273,6 +275,6 @@ export const MarketOverview = () => {
             </div>
         </Card>
     );
-};
+});
 
 export default MarketOverview;

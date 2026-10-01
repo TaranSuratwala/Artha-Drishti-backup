@@ -22,7 +22,7 @@ const buildApiBase = (rawBase) => {
 const API_BASE = buildApiBase(import.meta.env.VITE_API_BASE_URL); // proxied in dev; configurable in prod
 const DEFAULT_TIMEOUT = 30_000;                // 30 s
 const MAX_RETRIES = 2;
-const RETRY_BASE_MS = 1000;
+const RETRY_BASE_MS = 300;
 
 // ─── In-memory cache ────────────────────────────────────────────────────────
 
@@ -204,7 +204,7 @@ async function request(method, path, {
 
             // Retry on network errors or 5xx
             if (attempt < retries && (err.name === 'TypeError' || (err instanceof ApiError && err.status >= 500))) {
-                const delay = RETRY_BASE_MS * 2 ** attempt + Math.random() * 500;
+                const delay = RETRY_BASE_MS * 2 ** attempt + Math.random() * 100;
                 await new Promise(r => setTimeout(r, delay));
                 return execute(attempt + 1);
             }
@@ -577,7 +577,7 @@ export async function getPortfolioNews() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export async function fetchPriceTarget(ticker, capital = 100000, riskPct = 2) {
-    return get(`/price-target/${encodeURIComponent(ticker)}?capital=${capital}&risk_pct=${riskPct}`, { cacheTtl: 20_000, timeout: 15_000, retries: 1 });
+    return get(`/price-target/${encodeURIComponent(ticker)}?capital=${capital}&risk_pct=${riskPct}`, { cacheTtl: 20_000, timeout: 120_000, retries: 1 });
 }
 
 export async function fetchBatchPriceTargets(tickers, capital = 100000, riskPct = 2) {
@@ -653,6 +653,10 @@ export async function compareStockRisk(symbols, period = '1y') {
     return post('/risk/compare', { symbols, period }, { timeout: 60_000 });
 }
 
+export async function fetchBeginnerRiskSummary(ticker) {
+    return get(`/risk/${encodeURIComponent(ticker)}/beginner-summary`, { cacheTtl: 300_000, timeout: 60_000 });
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  ADVANCED STRATEGY ENGINE (Patent-Pending Module)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -683,4 +687,83 @@ export async function fetchSectorRotation(exchange = 'NSE') {
 
 export async function fetchStockReport(ticker, format = 'html') {
     return get(`/export/report/${encodeURIComponent(ticker)}?format=${encodeURIComponent(format)}`, { timeout: 120_000, cacheTtl: 0 });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  AGENT CHAT (LangGraph Integration)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export async function clearAgentSession(sessionId) {
+    return post('/agent/clear', { session_id: sessionId });
+}
+
+export async function streamAgentChat(message, sessionId, onChunk, onDone, onError) {
+    const token = localStorage.getItem('auth_token');
+    if (!token) {
+        if (onError) onError(new Error("Not authenticated"));
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/agent/chat`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({ message, session_id: sessionId })
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP Error: ${response.status}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = '';  // Accumulate partial lines across TCP chunks
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            // Split on newlines — the last element may be a partial line
+            const parts = buffer.split('\n');
+            // Keep the last (possibly incomplete) part in the buffer
+            buffer = parts.pop() || '';
+            
+            for (const line of parts) {
+                const trimmed = line.trim();
+                if (trimmed.startsWith('data: ')) {
+                    const dataStr = trimmed.substring(6).trim();
+                    if (dataStr === '[DONE]') {
+                        if (onDone) onDone();
+                        return;
+                    }
+                    if (dataStr) {
+                        try {
+                            const data = JSON.parse(dataStr);
+                            if (onChunk) onChunk(data);
+                        } catch (e) {
+                            console.warn("Skipping unparseable SSE chunk:", dataStr);
+                        }
+                    }
+                }
+            }
+        }
+        // Process any remaining buffer content
+        if (buffer.trim().startsWith('data: ')) {
+            const dataStr = buffer.trim().substring(6).trim();
+            if (dataStr && dataStr !== '[DONE]') {
+                try {
+                    const data = JSON.parse(dataStr);
+                    if (onChunk) onChunk(data);
+                } catch (e) { /* ignore trailing partial */ }
+            }
+        }
+        if (onDone) onDone();
+    } catch (err) {
+        console.error("Streaming error:", err);
+        if (onError) onError(err);
+    }
 }

@@ -61,6 +61,45 @@ services:
       - ./logs:/app/logs
     restart: unless-stopped
 
+  # Celery Worker
+  celery_worker:
+    build: .
+    container_name: stock_celery_worker
+    environment:
+      - DATABASE_URL=postgresql://postgres:${DB_PASSWORD:-your_password_here}@db:5432/StockDB
+      - REDIS_URL=redis://redis:6379/0
+      - FLASK_ENV=production
+      - APP_ENV=production
+      - SECRET_KEY=${SECRET_KEY:-change-this-in-production}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    command: celery -A celery_app.celery worker --loglevel=info
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./saved_models:/app/saved_models
+      - ./logs:/app/logs
+    restart: unless-stopped
+
+  # Celery Beat
+  celery_beat:
+    build: .
+    container_name: stock_celery_beat
+    environment:
+      - DATABASE_URL=postgresql://postgres:${DB_PASSWORD:-your_password_here}@db:5432/StockDB
+      - REDIS_URL=redis://redis:6379/0
+      - FLASK_ENV=production
+      - APP_ENV=production
+    command: celery -A celery_app.celery beat --loglevel=info
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:

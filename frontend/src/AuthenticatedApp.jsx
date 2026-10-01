@@ -11,16 +11,25 @@ import { useAuth } from './context/AuthContext';
 
 // Components
 import { Card, Button, StatCard, LoadingSpinner, Toast, ThemeToggle, SkeletonLoader } from './components/ui';
-import { PriceChart, StrategyComparison } from './components/charts';
-import { MultiStrategyPanel, StrategyBuilder } from './components/screener';
-import { MarketOverview, TopMovers, PriceTargetsDashboard, StockRecommendations } from './components/dashboard';
-import { WatchlistSearch, PortfolioDashboard } from './components/portfolio';
+import { DashboardContainer, PriceTargetsDashboard } from './components/dashboard';
+import RealtimeProgress from './components/dashboard/RealtimeProgress';
+
+
+const PriceChart = React.lazy(() => import('./components/charts').then(m => ({ default: m.PriceChart })));
+const StrategyComparison = React.lazy(() => import('./components/charts').then(m => ({ default: m.StrategyComparison })));
+const MultiStrategyPanel = React.lazy(() => import('./components/screener').then(m => ({ default: m.MultiStrategyPanel })));
+const StrategyBuilder = React.lazy(() => import('./components/screener').then(m => ({ default: m.StrategyBuilder })));
+const WatchlistSearch = React.lazy(() => import('./components/portfolio').then(m => ({ default: m.WatchlistSearch })));
+const PortfolioDashboard = React.lazy(() => import('./components/portfolio').then(m => ({ default: m.PortfolioDashboard })));
+const ChatPanel = React.lazy(() => import('./components/chat').then(m => ({ default: m.ChatPanel })));
 
 // API Services
 import * as api from './services/api';
 
 // Custom hooks
 import { useDebounce, useOnlineStatus, useDocumentTitle, useKeyboardShortcut } from './hooks';
+import { useSocket } from './hooks/useSocket';
+import { useStore } from './store/useStore';
 
 // Strategy configurations
 // Initial Predefined Strategies
@@ -48,6 +57,46 @@ const TABS = [
     { id: 'settings', name: 'Settings', icon: Settings }
 ];
 
+const GlobalSearchInput = React.memo(({ initialValue, onSearchChange }) => {
+    const [localTerm, setLocalTerm] = useState(initialValue || '');
+    
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            onSearchChange(localTerm);
+        }, 250);
+        return () => clearTimeout(timer);
+    }, [localTerm, onSearchChange]);
+
+    return (
+        <div className="relative flex items-center w-full max-w-xl bg-slate-800/50 hover:bg-slate-800/80 transition-colors border border-slate-700/50 rounded-xl px-4 py-2.5 focus-within:ring-2 focus-within:ring-blue-500/50 focus-within:border-blue-500/50 shadow-inner group">
+            <div className="absolute left-3 p-1">
+                <Search className="w-5 h-5 text-blue-300" />
+            </div>
+            <input
+                type="text"
+                data-search-input
+                placeholder="Search by ticker (e.g., RELIANCE, TCS)... Ctrl+K"
+                value={localTerm}
+                onChange={(e) => setLocalTerm(e.target.value)}
+                className="flex-1 bg-transparent outline-none text-white placeholder-blue-200/50 font-medium pl-8"
+                aria-label="Search stocks by ticker"
+            />
+            {localTerm && (
+                <button
+                    onClick={() => setLocalTerm('')}
+                    className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-gray-400 transition absolute right-12"
+                    aria-label="Clear search"
+                >
+                    <X className="w-4 h-4" />
+                </button>
+            )}
+            <span className="text-xs text-gray-500 ml-2 hidden sm:block font-mono bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700 absolute right-3">
+                ⌘K
+            </span>
+        </div>
+    );
+});
+
 export default function AuthenticatedApp({ theme, toggleTheme }) {
     // Auth hook
     const { user, logout } = useAuth();
@@ -62,16 +111,12 @@ export default function AuthenticatedApp({ theme, toggleTheme }) {
     const [strategies, setStrategies] = useState(INITIAL_STRATEGIES);
     const [showStrategyBuilder, setShowStrategyBuilder] = useState(false);
     const [loading, setLoading] = useState(true);
-    const [searchTerm, setSearchTerm] = useState('');
+    const setSearchTerm = useStore(state => state.setSearchTerm);
     const [selectedTicker, setSelectedTicker] = useState(null);
     const [chartData, setChartData] = useState([]);
     const [chartPeriod, setChartPeriod] = useState('1y');
     const [health, setHealth] = useState(null);
     const [stats, setStats] = useState(null);
-
-    // Pagination state – Nielsen #7: Flexibility
-    const [currentPage, setCurrentPage] = useState(1);
-    const ITEMS_PER_PAGE = 25;
     const [toast, setToast] = useState(null);
 
     // Screener state
@@ -189,20 +234,19 @@ export default function AuthenticatedApp({ theme, toggleTheme }) {
     const [riskError, setRiskError] = useState('');
     const [strategiesError, setStrategiesError] = useState('');
 
-    // Real-time quotes (yfinance, 10-15 min delayed)
-    const [liveQuotes, setLiveQuotes] = useState({});        // { ticker: { price, change, change_pct, ... } }
-    const [liveQuoteTime, setLiveQuoteTime] = useState(null); // last fetch timestamp
-    const [tickerQuote, setTickerQuote] = useState(null);     // single quote for modal header
+    // Real-time quotes (Zustand store)
+    const updateLiveQuotesBatch = useStore(state => state.updateLiveQuotesBatch);
+    const setLiveQuoteTime = useStore(state => state.setLiveQuoteTime);
+    const tickerQuote = useStore(state => state.tickerQuote);
+    const setTickerQuote = useStore(state => state.setTickerQuote);
+
     const LIVE_QUOTES_REFRESH_MS = 20_000;
-    const DASHBOARD_REFRESH_MS = 45_000;
+    const DASHBOARD_REFRESH_MS = 180_000;
 
     // Refs for scroll-to-view
     const predictionResultRef = useRef(null);
     const modalContentRef = useRef(null);
     const screenResultRef = useRef(null);
-
-    // Debounced search – Nielsen #2: Match between system & real world
-    const debouncedSearch = useDebounce(searchTerm, 250);
 
     // Dynamic document title – Nielsen #1: System status
     useDocumentTitle(
@@ -299,15 +343,12 @@ export default function AuthenticatedApp({ theme, toggleTheme }) {
         return () => document.body.classList.remove('modal-open');
     }, [selectedTicker]);
 
-    // Reset page on search change
-    useEffect(() => { setCurrentPage(1); }, [debouncedSearch]);
-
     // Auto-scroll to prediction results when they load
     useEffect(() => {
         if (prediction && predictionResultRef.current) {
             setTimeout(() => {
                 predictionResultRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            }, 200);
+            }, 50);
         }
     }, [prediction]);
 
@@ -325,7 +366,8 @@ export default function AuthenticatedApp({ theme, toggleTheme }) {
         try {
             const data = await api.fetchBatchQuotes(tickers);
             if (data?.quotes) {
-                setLiveQuotes(prev => ({ ...prev, ...data.quotes }));
+                // updateLiveQuotesBatch from Zustand
+                updateLiveQuotesBatch(data.quotes);
                 setLiveQuoteTime(new Date().toLocaleTimeString());
             }
         } catch (err) {
@@ -362,6 +404,8 @@ export default function AuthenticatedApp({ theme, toggleTheme }) {
         return [];
     }, [normalizeTickerForAnalysis]);
 
+    const { isConnected, subscribeToTicker, unsubscribeFromTicker, onQuoteUpdate, offQuoteUpdate } = useSocket();
+
     // Fetch single-ticker quote when modal opens
     useEffect(() => {
         if (!selectedTicker) { setTickerQuote(null); return; }
@@ -373,9 +417,24 @@ export default function AuthenticatedApp({ theme, toggleTheme }) {
             } catch { /* silent */ }
         };
         fetchIt();
-        const interval = setInterval(fetchIt, LIVE_QUOTES_REFRESH_MS);
-        return () => clearInterval(interval);
-    }, [selectedTicker, LIVE_QUOTES_REFRESH_MS]);
+        
+        subscribeToTicker(selectedTicker);
+        return () => unsubscribeFromTicker(selectedTicker);
+    }, [selectedTicker, subscribeToTicker, unsubscribeFromTicker]);
+
+    // Listen for WebSocket Quote Updates
+    useEffect(() => {
+        const handleUpdate = (data) => {
+            if (data && data.ticker) {
+                // liveQuotes and liveQuoteTime are now handled directly by useSocket
+                if (selectedTicker && data.ticker === selectedTicker) {
+                    setTickerQuote(data);
+                }
+            }
+        };
+        onQuoteUpdate(handleUpdate);
+        return () => offQuoteUpdate(handleUpdate);
+    }, [onQuoteUpdate, offQuoteUpdate, selectedTicker, setTickerQuote]);
 
     const loadStrategies = useCallback(async () => {
         try {
@@ -426,36 +485,6 @@ export default function AuthenticatedApp({ theme, toggleTheme }) {
         }, DASHBOARD_REFRESH_MS);
         return () => clearInterval(interval);
     }, [activeTab, fetchInitialData, DASHBOARD_REFRESH_MS]);
-
-    // Filtered stocks based on debounced search – Nielsen #2
-    const filteredStocks = useMemo(() =>
-        stocks.filter(s => (s.ticker || '').toLowerCase().includes(debouncedSearch.toLowerCase())),
-        [stocks, debouncedSearch]
-    );
-
-    // Pagination – Nielsen #7: Efficiency
-    const totalPages = Math.max(1, Math.ceil(filteredStocks.length / ITEMS_PER_PAGE));
-    const paginatedStocks = useMemo(() => {
-        const start = (currentPage - 1) * ITEMS_PER_PAGE;
-        return filteredStocks.slice(start, start + ITEMS_PER_PAGE);
-    }, [filteredStocks, currentPage, ITEMS_PER_PAGE]);
-
-    // Poll live quotes for currently visible paginated stocks
-    useEffect(() => {
-        if (activeTab !== 'dashboard' || loading) return;
-        const visibleTickers = paginatedStocks.map(s => s.ticker).filter(Boolean);
-        if (visibleTickers.length === 0) return;
-
-        // Fetch immediately
-        fetchLiveQuotes(visibleTickers);
-
-        // Then poll continuously for near real-time updates
-        const interval = setInterval(() => {
-            fetchLiveQuotes(visibleTickers);
-        }, LIVE_QUOTES_REFRESH_MS);
-
-        return () => clearInterval(interval);
-    }, [activeTab, loading, paginatedStocks, fetchLiveQuotes, LIVE_QUOTES_REFRESH_MS]);
 
     // ==================== API HANDLERS ====================
 
@@ -592,6 +621,7 @@ export default function AuthenticatedApp({ theme, toggleTheme }) {
         setSelectedTicker(normalizedSelection);
         setChartData([]);
         setPrediction(null);
+        setPredicting(false);
         setModalTab(initialTab);
         setFundamentals(null);
         setRiskMetrics(null);
@@ -767,11 +797,20 @@ export default function AuthenticatedApp({ theme, toggleTheme }) {
             }
             // The useEffect on `prediction` handles auto-scroll
         } catch (err) {
-            showToast(err.message || `Prediction failed for ${selectedTickerForDisplay}`, 'error');
+            const message = formatModalFetchMessage(err, `Prediction failed for ${selectedTickerForDisplay}.`);
+            setPrediction({ error: message });
+            showToast(message, 'error');
         } finally {
             setPredicting(false);
         }
     };
+
+    // Auto-run AI prediction when the user opens the AI tab or clicks Predict from screener.
+    useEffect(() => {
+        if (!selectedTicker || modalTab !== 'ai' || predicting || prediction) return;
+        handlePrediction();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedTicker, modalTab]);
 
     // Keep displayed prediction upside anchored to freshest live quote.
     useEffect(() => {
@@ -1117,232 +1156,24 @@ export default function AuthenticatedApp({ theme, toggleTheme }) {
                 className={`enterprise-main container pt-10 pb-8 relative ${profilePrefs.compactView ? 'enterprise-main-compact' : ''}`}
                 role="main"
             >
+                <React.Suspense fallback={<div className="p-8 flex justify-center items-center"><LoadingSpinner /></div>}>
                 {/* DASHBOARD TAB */}
                 {activeTab === 'dashboard' && (
-                    <div className="space-y-6 animate-fade-in dashboard-page industry-page-shell" role="tabpanel" id="panel-dashboard" aria-labelledby="tab-dashboard">
-                        {/* User greeting – Nielsen #6: Recognition */}
-                        {user && (
-                            <div className="flex items-center gap-3 mb-2">
-                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-white font-bold text-lg">
-                                    {user.avatar_url ? (
-                                        <img src={user.avatar_url} alt="" className="w-full h-full rounded-full object-cover" />
-                                    ) : (
-                                        (user.username || 'U')[0].toUpperCase()
-                                    )}
-                                </div>
-                                <div>
-                                    <h2 className="text-lg font-bold text-white">Welcome back, {user.username}!</h2>
-                                    <p className="text-xs text-blue-200">Here&apos;s your market overview for today</p>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Stats Grid */}
-                        {loading ? (
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                                {[...Array(4)].map((_, i) => <SkeletonLoader key={i} type="card" />)}
-                            </div>
-                        ) : (
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                                <StatCard icon={BarChart2} label="Total Stocks" value={stocks.length} color="blue" />
-                                <StatCard icon={TrendingUp} label="Gainers" value={stocks.filter(s => s.close > s.open).length} color="green" />
-                                <StatCard icon={ArrowDownRight} label="Losers" value={stocks.filter(s => s.close < s.open).length} color="red" />
-                                <StatCard icon={Star} label="Watchlist" value={watchlist.length} color="yellow" />
-                            </div>
-                        )}
-
-                        {/* Top Gainers/Losers - Live Data */}
-                        <TopMovers onTickerClick={handleOpenTicker} />
-
-                        {/* AI Stock Recommendations */}
-                        <StockRecommendations onTickerClick={handleOpenTicker} />
-
-                        {/* Market Overview Widget */}
-                        <MarketOverview />
-
-                        {/* Search – Nielsen #7: Accelerators */}
-                        <Card className="p-4 industry-section-card industry-search-card">
-                            <div className="flex items-center gap-3">
-                                <div className="p-2.5 bg-blue-500/20 rounded-xl">
-                                    <Search className="w-5 h-5 text-blue-300" />
-                                </div>
-                                <input
-                                    type="text"
-                                    data-search-input
-                                    placeholder="Search by ticker (e.g., RELIANCE, TCS)... Ctrl+K"
-                                    value={searchTerm}
-                                    onChange={(e) => setSearchTerm(e.target.value)}
-                                    className="flex-1 bg-transparent outline-none text-white placeholder-blue-200/50 font-medium"
-                                    aria-label="Search stocks by ticker"
-                                />
-                                {searchTerm && (
-                                    <button
-                                        onClick={() => setSearchTerm('')}
-                                        className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-gray-400 transition"
-                                        aria-label="Clear search"
-                                    >
-                                        <X className="w-4 h-4" />
-                                    </button>
-                                )}
-                                <span className="text-xs text-gray-500">
-                                    {filteredStocks.length} results
-                                </span>
-                            </div>
-                        </Card>
-
-                        {/* Stocks Table with Pagination */}
-                        {loading ? (
-                            <Card className="p-6">
-                                <SkeletonLoader type="table" rows={8} />
-                            </Card>
-                        ) : (
-                            <Card className="overflow-hidden industry-table-shell industry-table-dashboard">
-                                {/* Live data indicator */}
-                                {liveQuoteTime && (
-                                    <div className="px-4 pt-3 flex items-center gap-2 text-xs text-gray-400">
-                                        <span className="live-dot" />
-                                        <span>Realtime stream active &middot; Last update: {liveQuoteTime}</span>
-                                    </div>
-                                )}
-                                <div className="overflow-x-auto industry-table-scroll">
-                                    <table className="industry-dense-table industry-dashboard-table">
-                                        <thead>
-                                            <tr>
-                                                <th>Ticker</th>
-                                                <th className="text-right">DB Close</th>
-                                                <th className="text-right">Live Price</th>
-                                                <th className="text-right">Change</th>
-                                                <th className="text-right">Day Range</th>
-                                                <th className="text-right">Volume</th>
-                                                <th className="text-center industry-action-col">Action</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-white/5">
-                                            {paginatedStocks.map((stock, idx) => {
-                                                const q = liveQuotes[stock.ticker];
-                                                const livePrice = q?.price;
-                                                const changePct = q?.change_pct;
-                                                const isUp = changePct > 0;
-                                                const isDown = changePct < 0;
-                                                return (
-                                                <tr key={stock.ticker || idx}>
-                                                    <td
-                                                        className="font-bold text-blue-400 cursor-pointer hover:text-blue-300 focus:text-blue-300"
-                                                        onClick={() => handleOpenTicker(stock.ticker)}
-                                                        tabIndex={0}
-                                                        onKeyDown={(e) => e.key === 'Enter' && handleOpenTicker(stock.ticker)}
-                                                        role="button"
-                                                    >
-                                                        {formatTickerForDisplay(stock.ticker)}
-                                                    </td>
-                                                    <td className="text-right text-sm text-gray-400">₹{(stock.close || 0).toFixed(2)}</td>
-                                                    <td className="text-right font-bold">
-                                                        {livePrice ? (
-                                                            <span className={isUp ? 'text-green-400' : isDown ? 'text-red-400' : 'text-white'}>
-                                                                ₹{livePrice.toFixed(2)}
-                                                            </span>
-                                                        ) : (
-                                                            <span className="text-gray-500 text-xs">—</span>
-                                                        )}
-                                                    </td>
-                                                    <td className="text-right text-sm">
-                                                        {changePct != null ? (
-                                                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold ${isUp ? 'bg-green-500/20 text-green-400' : isDown ? 'bg-red-500/20 text-red-400' : 'bg-gray-500/20 text-gray-400'}`}>
-                                                                {isUp ? <ArrowUpRight className="w-3 h-3" /> : isDown ? <ArrowDownRight className="w-3 h-3" /> : null}
-                                                                {changePct > 0 ? '+' : ''}{changePct.toFixed(2)}%
-                                                            </span>
-                                                        ) : (
-                                                            <span className="text-gray-500 text-xs">—</span>
-                                                        )}
-                                                    </td>
-                                                    <td className="text-right text-xs text-gray-300">
-                                                        {q?.day_low != null && q?.day_high != null ? (
-                                                            <span>₹{q.day_low.toFixed(0)} – ₹{q.day_high.toFixed(0)}</span>
-                                                        ) : (
-                                                            <span className="text-gray-500">—</span>
-                                                        )}
-                                                    </td>
-                                                    <td className="text-right text-sm text-gray-300">
-                                                        {(q?.volume || stock.volume || 0).toLocaleString()}
-                                                    </td>
-                                                    <td className="text-center industry-action-cell">
-                                                        <button
-                                                            onClick={() => watchlist.includes(stock.ticker) ? handleWatchlistRemove(stock.ticker) : handleWatchlistAdd(stock.ticker)}
-                                                            className={`industry-action-btn industry-watchlist-toggle p-1.5 rounded-lg transition ${watchlist.includes(stock.ticker) ? 'bg-yellow-500/20 text-yellow-400' : 'bg-white/10 text-gray-400 hover:text-yellow-400'}`}
-                                                            aria-label={watchlist.includes(stock.ticker) ? `Remove ${formatTickerForDisplay(stock.ticker)} from watchlist` : `Add ${formatTickerForDisplay(stock.ticker)} to watchlist`}
-                                                        >
-                                                            {watchlist.includes(stock.ticker) ? <Star className="w-4 h-4 fill-current" /> : <StarOff className="w-4 h-4" />}
-                                                        </button>
-                                                    </td>
-                                                </tr>
-                                                );
-                                            })}
-                                        </tbody>
-                                    </table>
-                                </div>
-
-                                {/* Pagination – Nielsen #3: User control & #7: Flexibility */}
-                                {totalPages > 1 && (
-                                    <div className="pagination" role="navigation" aria-label="Stock table pagination">
-                                        <button
-                                            onClick={() => setCurrentPage(1)}
-                                            disabled={currentPage === 1}
-                                            aria-label="First page"
-                                        >
-                                            <ChevronsLeft className="w-4 h-4" />
-                                        </button>
-                                        <button
-                                            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                                            disabled={currentPage === 1}
-                                            aria-label="Previous page"
-                                        >
-                                            <ChevronLeft className="w-4 h-4" />
-                                        </button>
-
-                                        {/* Page numbers */}
-                                        {(() => {
-                                            const pages = [];
-                                            const start = Math.max(1, currentPage - 2);
-                                            const end = Math.min(totalPages, currentPage + 2);
-                                            for (let i = start; i <= end; i++) {
-                                                pages.push(
-                                                    <button
-                                                        key={i}
-                                                        onClick={() => setCurrentPage(i)}
-                                                        className={i === currentPage ? 'active' : ''}
-                                                        aria-label={`Page ${i}`}
-                                                        aria-current={i === currentPage ? 'page' : undefined}
-                                                    >
-                                                        {i}
-                                                    </button>
-                                                );
-                                            }
-                                            return pages;
-                                        })()}
-
-                                        <button
-                                            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                                            disabled={currentPage === totalPages}
-                                            aria-label="Next page"
-                                        >
-                                            <ChevronRight className="w-4 h-4" />
-                                        </button>
-                                        <button
-                                            onClick={() => setCurrentPage(totalPages)}
-                                            disabled={currentPage === totalPages}
-                                            aria-label="Last page"
-                                        >
-                                            <ChevronsRight className="w-4 h-4" />
-                                        </button>
-
-                                        <span className="text-xs text-gray-400 ml-3">
-                                            Page {currentPage} of {totalPages} ({filteredStocks.length} stocks)
-                                        </span>
-                                    </div>
-                                )}
-                            </Card>
-                        )}
-                    </div>
+                    <DashboardContainer
+                        user={user}
+                        loading={loading}
+                        stocks={stocks}
+                        watchlist={watchlist}
+                        handleOpenTicker={handleOpenTicker}
+                        handleWatchlistAdd={handleWatchlistAdd}
+                        handleWatchlistRemove={handleWatchlistRemove}
+                        GlobalSearchInput={GlobalSearchInput}
+                        formatTickerForDisplay={formatTickerForDisplay}
+                        activeTab={activeTab}
+                        fetchLiveQuotes={fetchLiveQuotes}
+                        subscribeToTicker={subscribeToTicker}
+                        unsubscribeFromTicker={unsubscribeFromTicker}
+                    />
                 )}
 
                 {/* SCREENER TAB */}
@@ -2613,6 +2444,7 @@ export default function AuthenticatedApp({ theme, toggleTheme }) {
                         </Card>
                     </div>
                 )}
+                </React.Suspense>
             </main>
 
             {/* Stock Detail Modal – Nielsen #3: User control (Escape to close) */}
@@ -3943,8 +3775,16 @@ export default function AuthenticatedApp({ theme, toggleTheme }) {
                 </div>
             )}
 
+            {/* AI Agent Chat */}
+            <React.Suspense fallback={null}>
+                <ChatPanel />
+            </React.Suspense>
+
             {/* Toast */}
             {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+            
+            {/* Real-time Progress Notifications */}
+            <RealtimeProgress />
         </div>
     );
 }

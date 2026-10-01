@@ -1,1582 +1,3 @@
-# import pandas as pd
-# import pandas_ta as ta
-# import yfinance as yf
-# from textblob import TextBlob
-# import numpy as np
-# from typing import Dict, List, Tuple, Optional
-# import logging
-# from datetime import datetime, timedelta
-# import warnings
-# from functools import lru_cache
-# from sklearn.preprocessing import RobustScaler
-# from sqlalchemy import create_engine, text, inspect
-# from sqlalchemy.exc import ProgrammingError
-# from tqdm import tqdm
-
-# # Filter warnings
-# warnings.filterwarnings('ignore')
-
-# # Configure logging (ASCII only for Windows compatibility)
-# logging.basicConfig(
-#     level=logging.INFO,
-#     format='%(asctime)s - %(levelname)s - %(message)s',
-#     handlers=[
-#         logging.FileHandler('feature_engineering.log'),
-#         logging.StreamHandler()
-#     ]
-# )
-# logger = logging.getLogger(__name__)
-
-# # --- CONFIGURATION ---
-# DB_URL = "postgresql://postgres:Taran%4017@localhost:5432/StockDB"
-
-# class StockFeatureEngineer:
-#     """
-#     Production-grade feature engineering pipeline for stock price prediction.
-#     """
-    
-#     def __init__(self, df: pd.DataFrame, ticker: str = None):
-#         """
-#         Initialize with OHLCV data.
-#         Sets DatetimeIndex for pandas_ta compatibility.
-#         """
-#         # Lowercase columns for consistency
-#         df.columns = [c.lower() for c in df.columns]
-        
-#         required_cols = ['date', 'open', 'high', 'low', 'close', 'volume']
-#         missing_cols = [col for col in required_cols if col not in df.columns]
-#         if missing_cols:
-#             raise ValueError(f"Missing required columns: {missing_cols}")
-        
-#         self.df = df.copy()
-#         self.ticker = ticker
-        
-#         # 1. Convert date to datetime
-#         self.df['date'] = pd.to_datetime(self.df['date'])
-        
-#         # 2. Set Date as Index (Required for VWAP and Time-Series functions)
-#         self.df.set_index('date', inplace=True)
-#         self.df.sort_index(inplace=True)
-        
-#         # 3. Handle Duplicate Indices
-#         if not self.df.index.is_unique:
-#             self.df = self.df.loc[~self.df.index.duplicated(keep='first')]
-
-#         # Use adj_close if available, otherwise close
-#         if 'adj_close' in self.df.columns:
-#             self.df['price'] = self.df['adj_close']
-#         else:
-#             self.df['price'] = self.df['close']
-        
-#         # Store original columns
-#         self.original_cols = self.df.columns.tolist()
-
-#     def add_technical_indicators(self) -> pd.DataFrame:
-#         """Comprehensive technical indicators suite."""
-#         # 1. Moving Averages
-#         for period in [5, 10, 20, 50, 100, 200]:
-#             self.df[f'sma_{period}'] = self.df.ta.sma(length=period)
-#             self.df[f'ema_{period}'] = self.df.ta.ema(length=period)
-        
-#         # 2. MACD
-#         try:
-#             macd = self.df.ta.macd(fast=12, slow=26, signal=9)
-#             if macd is not None:
-#                 self.df = pd.concat([self.df, macd], axis=1)
-#         except Exception: pass
-        
-#         # 3. ADX
-#         try:
-#             adx = self.df.ta.adx(length=14)
-#             if adx is not None:
-#                 self.df = pd.concat([self.df, adx], axis=1)
-#         except Exception: pass
-        
-#         # 4. Ichimoku Cloud
-#         try:
-#             ichimoku = self.df.ta.ichimoku()
-#             if ichimoku is not None and len(ichimoku) > 0:
-#                 self.df = pd.concat([self.df, ichimoku[0]], axis=1)
-#         except Exception: pass
-        
-#         # 5. Parabolic SAR
-#         try:
-#             psar = self.df.ta.psar()
-#             if psar is not None:
-#                 self.df = pd.concat([self.df, psar], axis=1)
-#         except Exception: pass
-        
-#         # 6. RSI
-#         for period in [9, 14, 21]:
-#             self.df[f'rsi_{period}'] = self.df.ta.rsi(length=period)
-        
-#         # 7. Stochastic
-#         try:
-#             stoch = self.df.ta.stoch(k=14, d=3)
-#             if stoch is not None:
-#                 self.df = pd.concat([self.df, stoch], axis=1)
-#         except Exception: pass
-        
-#         # 8. Williams %R
-#         self.df['willr'] = self.df.ta.willr(length=14)
-        
-#         # 9. ROC
-#         for period in [9, 14, 21]:
-#             self.df[f'roc_{period}'] = self.df.ta.roc(length=period)
-        
-#         # 10. CCI
-#         self.df['cci'] = self.df.ta.cci(length=20)
-        
-#         # 11. MFI
-#         self.df['mfi'] = self.df.ta.mfi(length=14)
-        
-#         # 12. Bollinger Bands
-#         try:
-#             bbands = self.df.ta.bbands(length=20, std=2)
-#             if bbands is not None:
-#                 self.df = pd.concat([self.df, bbands], axis=1)
-#                 if 'BBU_20_2.0' in self.df.columns and 'BBL_20_2.0' in self.df.columns:
-#                     self.df['bb_width'] = (self.df['BBU_20_2.0'] - self.df['BBL_20_2.0']) / (self.df['BBM_20_2.0'] + 1e-10)
-#         except Exception: pass
-        
-#         # 13. ATR
-#         for period in [7, 14, 21]:
-#             self.df[f'atr_{period}'] = self.df.ta.atr(length=period)
-        
-#         # 14. Keltner Channels
-#         try:
-#             kc = self.df.ta.kc(length=20)
-#             if kc is not None:
-#                 self.df = pd.concat([self.df, kc], axis=1)
-#         except Exception: pass
-        
-#         # 15. Historical Volatility
-#         self.df['hist_vol_20'] = self.df['close'].pct_change().rolling(20).std() * np.sqrt(252)
-        
-#         # 16. Volume SMA
-#         self.df['volume_sma_20'] = self.df['volume'].rolling(20).mean()
-#         self.df['volume_ratio'] = self.df['volume'] / (self.df['volume_sma_20'] + 1e-10)
-        
-#         # 17. OBV
-#         self.df['obv'] = self.df.ta.obv()
-        
-#         # 18. VWAP
-#         try:
-#             if not isinstance(self.df.index, pd.DatetimeIndex):
-#                 self.df.index = pd.to_datetime(self.df.index)
-            
-#             vwap = self.df.ta.vwap()
-#             if isinstance(vwap, pd.Series):
-#                 self.df['vwap'] = vwap
-#             elif isinstance(vwap, pd.DataFrame):
-#                 self.df['vwap'] = vwap.iloc[:, 0]
-#         except Exception:
-#             tp = (self.df['high'] + self.df['low'] + self.df['close']) / 3
-#             self.df['vwap'] = (tp * self.df['volume']).cumsum() / (self.df['volume'].cumsum() + 1e-10)
-        
-#         # 19. Accumulation/Distribution
-#         self.df['ad'] = self.df.ta.ad()
-        
-#         # 20. Chaikin Money Flow
-#         self.df['cmf'] = self.df.ta.cmf(length=20)
-        
-#         # 21. SuperTrend
-#         for mult in [2, 3]:
-#             try:
-#                 st = self.df.ta.supertrend(length=10, multiplier=mult)
-#                 if st is not None:
-#                     self.df = pd.concat([self.df, st.add_suffix(f'_{mult}')], axis=1)
-#             except Exception: pass
-        
-#         return self.df
-
-#     def add_price_patterns(self) -> pd.DataFrame:
-#         """Advanced candlestick pattern detection."""
-#         patterns = [
-#             'doji', 'hammer', 'inverted_hammer', 'hanging_man',
-#             'engulfing', 'harami', 'piercing', 'dark_cloud_cover',
-#             'morning_star', 'evening_star', 'shooting_star', 'marubozu'
-#         ]
-        
-#         for pattern in patterns:
-#             try:
-#                 result = self.df.ta.cdl_pattern(name=pattern)
-#                 if result is not None:
-#                     self.df[f'cdl_{pattern}'] = result / 100.0
-#             except Exception: pass
-        
-#         # Price Action Features
-#         self.df['body_size'] = abs(self.df['close'] - self.df['open']) / (self.df['close'] + 1e-10)
-#         self.df['swing_high'] = self.df['high'].rolling(window=10, center=True).max()
-#         self.df['swing_low'] = self.df['low'].rolling(window=10, center=True).min()
-#         self.df['gap_up'] = ((self.df['open'] - self.df['close'].shift(1)) / (self.df['close'].shift(1) + 1e-10)) > 0.02
-        
-#         return self.df
-
-#     def add_statistical_features(self) -> pd.DataFrame:
-#         """Statistical features."""
-#         for period in [1, 3, 5, 10, 20]:
-#             self.df[f'return_{period}d'] = self.df['close'].pct_change(period)
-#             self.df[f'log_return_{period}d'] = np.log(self.df['close'] / (self.df['close'].shift(period) + 1e-10))
-        
-#         for window in [5, 10, 20]:
-#             self.df[f'return_mean_{window}'] = self.df['return_1d'].rolling(window).mean()
-#             self.df[f'return_std_{window}'] = self.df['return_1d'].rolling(window).std()
-        
-#         for period in [20, 50]:
-#             mean = self.df['close'].rolling(period).mean()
-#             std = self.df['close'].rolling(period).std()
-#             self.df[f'zscore_{period}'] = (self.df['close'] - mean) / (std + 1e-10)
-        
-#         self.df['momentum_10'] = self.df['close'] - self.df['close'].shift(10)
-#         return self.df
-
-#     def add_market_microstructure(self) -> pd.DataFrame:
-#         """Liquidity features."""
-#         self.df['hl_spread'] = (self.df['high'] - self.df['low']) / (self.df['close'] + 1e-10)
-#         self.df['amihud_ratio'] = abs(self.df['return_1d']) / (self.df['volume'] * self.df['close'] + 1e-10)
-        
-#         if 'vwap' in self.df.columns:
-#             self.df['vwap_deviation'] = (self.df['close'] - self.df['vwap']) / (self.df['vwap'] + 1e-10)
-        
-#         return self.df
-
-#     @lru_cache(maxsize=128)
-#     def get_fundamental_data(self, ticker: str) -> Dict:
-#         """Fetch fundamental data with caching."""
-#         if not ticker: return {}
-#         try:
-#             stock = yf.Ticker(ticker)
-#             info = stock.info
-#             return {
-#                 'market_cap': info.get('marketCap', 0),
-#                 'pe_ratio': info.get('trailingPE', 0),
-#                 'forward_pe': info.get('forwardPE', 0),
-#                 'pb_ratio': info.get('priceToBook', 0),
-#                 'profit_margins': info.get('profitMargins', 0),
-#                 'roe': info.get('returnOnEquity', 0),
-#                 'debt_to_equity': info.get('debtToEquity', 0),
-#                 'revenue_growth': info.get('revenueGrowth', 0),
-#                 'beta': info.get('beta', 1.0)
-#             }
-#         except Exception:
-#             return {}
-
-#     def get_sentiment_analysis(self, ticker: str) -> Dict:
-#         """Basic sentiment analysis."""
-#         if not ticker: return {'sentiment_score': 0}
-#         try:
-#             stock = yf.Ticker(ticker)
-#             news = stock.news
-#             if not news: return {'sentiment_score': 0}
-            
-#             sentiments = []
-#             for article in news[:5]:
-#                 text = f"{article.get('title', '')}. {article.get('summary', '')}"
-#                 blob = TextBlob(text)
-#                 sentiments.append(blob.sentiment.polarity)
-            
-#             return {
-#                 'sentiment_score': np.mean(sentiments) if sentiments else 0,
-#                 'sentiment_std': np.std(sentiments) if len(sentiments) > 1 else 0
-#             }
-#         except Exception:
-#             return {'sentiment_score': 0}
-
-#     def add_fundamental_features(self) -> pd.DataFrame:
-#         if not self.ticker: return self.df
-#         fundamentals = self.get_fundamental_data(self.ticker)
-#         for key, value in fundamentals.items():
-#             self.df[f'fund_{key}'] = value
-#         return self.df
-
-#     def add_sentiment_features(self) -> pd.DataFrame:
-#         if not self.ticker: return self.df
-#         sentiment = self.get_sentiment_analysis(self.ticker)
-#         for key, value in sentiment.items():
-#             self.df[f'sent_{key}'] = value
-#         return self.df
-
-#     def add_target_variables(self, forward_periods: List[int] = [5, 10, 20]) -> pd.DataFrame:
-#         """Create targets for ML models."""
-#         for period in forward_periods:
-#             self.df[f'target_close_{period}d'] = self.df['close'].shift(-period)
-#             self.df[f'target_high_{period}d'] = self.df['high'].rolling(period).max().shift(-period)
-#             self.df[f'target_low_{period}d'] = self.df['low'].rolling(period).min().shift(-period)
-            
-#             # Risk/Reward Targets
-#             max_gain = (self.df[f'target_high_{period}d'] - self.df['close'])
-#             max_loss = (self.df['close'] - self.df[f'target_low_{period}d'])
-#             self.df[f'target_rr_ratio_{period}d'] = max_gain / (max_loss + 1e-10)
-        
-#         if 'atr_14' in self.df.columns:
-#             self.df['suggested_stop_loss'] = self.df['close'] - (2 * self.df['atr_14'])
-        
-#         return self.df
-
-#     def add_lag_features(self, lags: List[int] = [1, 2, 3, 5]) -> pd.DataFrame:
-#         """Add lagged features."""
-#         features_to_lag = ['close', 'volume', 'rsi_14', 'atr_14']
-#         for feature in features_to_lag:
-#             if feature in self.df.columns:
-#                 for lag in lags:
-#                     self.df[f'{feature}_lag_{lag}'] = self.df[feature].shift(lag)
-#         return self.df
-
-#     def handle_missing_values(self) -> pd.DataFrame:
-#         """Fill NaNs and remove infinite values."""
-#         self.df = self.df.replace([np.inf, -np.inf], np.nan)
-#         self.df = self.df.ffill().bfill().fillna(0)
-#         return self.df
-
-#     def build_features(self, 
-#                        include_fundamentals: bool = True,
-#                        include_sentiment: bool = True,
-#                        include_targets: bool = True) -> pd.DataFrame:
-#         """
-#         Master execution method.
-#         Returns DataFrame with 'date' as a column (Index Reset).
-#         """
-#         self.add_technical_indicators()
-#         self.add_price_patterns()
-#         self.add_statistical_features()
-#         self.add_market_microstructure()
-#         self.add_lag_features()
-        
-#         if include_fundamentals and self.ticker:
-#             self.add_fundamental_features()
-        
-#         if include_sentiment and self.ticker:
-#             self.add_sentiment_features()
-        
-#         if include_targets:
-#             self.add_target_variables()
-        
-#         self.handle_missing_values()
-        
-#         # Important: Reset index so 'date' is a column
-#         self.df.reset_index(inplace=True)
-        
-#         # CRITICAL FIX: Remove duplicate columns
-#         # Some indicators may produce duplicate column names (e.g. ISA_9)
-#         # This deduplicates columns, keeping the first occurrence.
-#         self.df = self.df.loc[:, ~self.df.columns.duplicated()]
-        
-#         return self.df
-
-
-# class PipelineOrchestrator:
-#     """Manages Database Connections and Batch Processing"""
-    
-#     def __init__(self, db_url: str):
-#         self.engine = create_engine(db_url, pool_pre_ping=True)
-#         self.table_name = 'engineered_features'
-
-#     def get_all_tickers(self) -> List[str]:
-#         """Fetch unique tickers from DB."""
-#         try:
-#             with self.engine.connect() as conn:
-#                 result = conn.execute(text("SELECT DISTINCT ticker FROM nse_stocks ORDER BY ticker"))
-#                 return [row[0] for row in result]
-#         except Exception as e:
-#             logger.error(f"Failed to fetch tickers: {e}")
-#             return []
-
-#     def get_stock_data(self, ticker: str) -> pd.DataFrame:
-#         """Fetch data for ticker."""
-#         query = text("""
-#             SELECT date, open, high, low, close, volume, adj_close
-#             FROM nse_stocks 
-#             WHERE ticker = :ticker 
-#             ORDER BY date ASC
-#         """)
-#         return pd.read_sql(query, self.engine, params={'ticker': ticker})
-
-#     def sync_table_schema(self, df: pd.DataFrame, inspector):
-#         """
-#         Ensures DB table has all columns present in DataFrame.
-#         Adds missing columns dynamically.
-#         """
-#         try:
-#             # Get existing columns in DB
-#             existing_columns = [col['name'] for col in inspector.get_columns(self.table_name)]
-            
-#             # Identify missing columns
-#             df_columns = list(df.columns)
-#             missing_cols = [col for col in df_columns if col not in existing_columns]
-            
-#             if missing_cols:
-#                 logger.info(f"Syncing schema: Adding {len(missing_cols)} new columns to {self.table_name}")
-#                 with self.engine.begin() as conn:
-#                     for col in missing_cols:
-#                         # Map pandas types to SQL types generically
-#                         dtype = df[col].dtype
-#                         if pd.api.types.is_integer_dtype(dtype):
-#                             sql_type = "BIGINT"
-#                         elif pd.api.types.is_float_dtype(dtype):
-#                             sql_type = "DOUBLE PRECISION"
-#                         elif pd.api.types.is_datetime64_any_dtype(dtype):
-#                             sql_type = "TIMESTAMP"
-#                         elif pd.api.types.is_bool_dtype(dtype):
-#                             sql_type = "BOOLEAN"
-#                         else:
-#                             sql_type = "TEXT"
-                            
-#                         # Add column - Use quote identifier to handle special chars/case
-#                         conn.execute(text(f'ALTER TABLE "{self.table_name}" ADD COLUMN "{col}" {sql_type}'))
-#         except Exception as e:
-#             logger.error(f"Schema sync failed: {e}")
-#             raise
-
-#     def save_features(self, df: pd.DataFrame):
-#         """
-#         Save features to DB with Schema Evolution and Safe Writes.
-#         1. Deduplicates DataFrame columns.
-#         2. Checks if table exists (Creates if not).
-#         3. Syncs schema (Adds new columns if DF has them).
-#         4. Deletes old records for the specific ticker (Deduplication).
-#         5. Inserts new records.
-#         """
-#         if df.empty: return
-        
-#         # Double check deduplication before any DB op
-#         df = df.loc[:, ~df.columns.duplicated()]
-        
-#         ticker = df['ticker'].iloc[0]
-#         inspector = inspect(self.engine)
-        
-#         try:
-#             # 1. Check Table Existence
-#             if not inspector.has_table(self.table_name):
-#                 logger.info(f"Table {self.table_name} does not exist. Creating...")
-#                 # Use DataFrame to create initial table structure
-#                 # We use duplicated check here too just in case
-#                 df.head(0).to_sql(self.table_name, self.engine, if_exists='replace', index=False)
-                
-#                 # Add constraints/indexes immediately after creation
-#                 with self.engine.begin() as conn:
-#                     conn.execute(text(f"""
-#                         ALTER TABLE "{self.table_name}" 
-#                         ADD CONSTRAINT pk_engineered_features PRIMARY KEY (ticker, date);
-#                     """))
-#                     conn.execute(text(f"""
-#                         CREATE INDEX IF NOT EXISTS idx_ef_ticker ON "{self.table_name}" (ticker);
-#                     """))
-#             else:
-#                 # 2. Sync Schema (Add missing columns)
-#                 self.sync_table_schema(df, inspector)
-
-#             # 3. Deduplicate (Delete existing data for this ticker)
-#             # Wrapped in try-except to handle race conditions or phantom tables
-#             try:
-#                 with self.engine.begin() as conn:
-#                     conn.execute(
-#                         text(f'DELETE FROM "{self.table_name}" WHERE ticker = :ticker'),
-#                         {'ticker': ticker}
-#                     )
-#             except ProgrammingError:
-#                 # If delete fails due to table missing (race condition), ignore and proceed to insert
-#                 logger.warning(f"Delete failed for {ticker}, table might have been dropped. Proceeding to insert.")
-
-#             # 4. Insert Data
-#             df.to_sql(
-#                 self.table_name, 
-#                 self.engine, 
-#                 if_exists='append', 
-#                 index=False, 
-#                 method='multi', 
-#                 chunksize=500
-#             )
-            
-#         except Exception as e:
-#             logger.error(f"Failed to save features for {ticker}: {e}")
-#             raise e
-
-#     def run_pipeline(self):
-#         """Run pipeline for all stocks."""
-#         tickers = self.get_all_tickers()
-        
-#         if not tickers:
-#             logger.error("No tickers found in database.")
-#             return
-
-#         logger.info(f"[START] Feature Engineering Pipeline for {len(tickers)} stocks")
-        
-#         success_count = 0
-#         error_count = 0
-        
-#         pbar = tqdm(tickers, desc="Processing")
-        
-#         for ticker in pbar:
-#             try:
-#                 # 1. Fetch Data
-#                 df_raw = self.get_stock_data(ticker)
-                
-#                 if df_raw.empty or len(df_raw) < 50:
-#                     continue
-                
-#                 # 2. Process
-#                 engineer = StockFeatureEngineer(df_raw, ticker=ticker)
-                
-#                 # Skipping external API calls for bulk speed
-#                 df_features = engineer.build_features(
-#                     include_fundamentals=False,
-#                     include_sentiment=False,
-#                     include_targets=True
-#                 )
-                
-#                 # 3. Add Ticker Column
-#                 if 'ticker' not in df_features.columns:
-#                     df_features['ticker'] = ticker
-                
-#                 # CRITICAL CHANGE: Keep only the latest row (Snapshot Logic)
-#                 # Since we calculated features using history, taking the last row gives
-#                 # us the "Latest Date" features.
-#                 df_features = df_features.iloc[[-1]]
-                
-#                 # 4. Save
-#                 self.save_features(df_features)
-#                 success_count += 1
-                
-#             except Exception as e:
-#                 # Log to file, keep console clean
-#                 logger.debug(f"Error processing {ticker}: {e}")
-#                 error_count += 1
-        
-#         logger.info(f"[DONE] Success: {success_count}, Errors: {error_count}")
-
-
-# if __name__ == "__main__":
-#     try:
-#         pipeline = PipelineOrchestrator(DB_URL)
-#         pipeline.run_pipeline()
-#     except Exception as e:
-#         logger.critical(f"Critical Failure: {e}")
-
-
-
-
-
-# import pandas as pd
-# import pandas_ta as ta
-# import yfinance as yf
-# from textblob import TextBlob
-# import numpy as np
-# from typing import Dict, List, Tuple, Optional
-# import logging
-# from datetime import datetime, timedelta
-# import warnings
-# from functools import lru_cache
-# from sklearn.preprocessing import RobustScaler
-# from sqlalchemy import create_engine, text, inspect
-# from sqlalchemy.exc import ProgrammingError
-# from tqdm import tqdm
-
-# # Filter warnings
-# warnings.filterwarnings('ignore')
-
-# # Configure logging (ASCII only for Windows compatibility)
-# logging.basicConfig(
-#     level=logging.INFO,
-#     format='%(asctime)s - %(levelname)s - %(message)s',
-#     handlers=[
-#         logging.FileHandler('feature_engineering.log'),
-#         logging.StreamHandler()
-#     ]
-# )
-# logger = logging.getLogger(__name__)
-
-# # --- CONFIGURATION ---
-# DB_URL = "postgresql://postgres:Taran%4017@localhost:5432/StockDB"
-
-# class StockFeatureEngineer:
-#     """
-#     Production-grade feature engineering pipeline for stock price prediction.
-#     """
-    
-#     def __init__(self, df: pd.DataFrame, ticker: str = None):
-#         """
-#         Initialize with OHLCV data.
-#         Sets DatetimeIndex for pandas_ta compatibility.
-#         """
-#         # Lowercase columns for consistency
-#         df.columns = [c.lower() for c in df.columns]
-        
-#         required_cols = ['date', 'open', 'high', 'low', 'close', 'volume']
-#         missing_cols = [col for col in required_cols if col not in df.columns]
-#         if missing_cols:
-#             raise ValueError(f"Missing required columns: {missing_cols}")
-        
-#         self.df = df.copy()
-#         self.ticker = ticker
-        
-#         # 1. Convert date to datetime
-#         self.df['date'] = pd.to_datetime(self.df['date'])
-        
-#         # 2. Set Date as Index (Required for VWAP and Time-Series functions)
-#         self.df.set_index('date', inplace=True)
-#         self.df.sort_index(inplace=True)
-        
-#         # 3. Handle Duplicate Indices
-#         if not self.df.index.is_unique:
-#             self.df = self.df.loc[~self.df.index.duplicated(keep='first')]
-
-#         # Use adj_close if available, otherwise close
-#         if 'adj_close' in self.df.columns:
-#             self.df['price'] = self.df['adj_close']
-#         else:
-#             self.df['price'] = self.df['close']
-        
-#         # Store original columns
-#         self.original_cols = self.df.columns.tolist()
-
-#     def add_technical_indicators(self) -> pd.DataFrame:
-#         """Comprehensive technical indicators suite."""
-#         # 1. Moving Averages
-#         for period in [5, 10, 20, 50, 100, 200]:
-#             self.df[f'sma_{period}'] = self.df.ta.sma(length=period)
-#             self.df[f'ema_{period}'] = self.df.ta.ema(length=period)
-        
-#         # 2. MACD
-#         try:
-#             macd = self.df.ta.macd(fast=12, slow=26, signal=9)
-#             if macd is not None:
-#                 self.df = pd.concat([self.df, macd], axis=1)
-#         except Exception: pass
-        
-#         # 3. ADX
-#         try:
-#             adx = self.df.ta.adx(length=14)
-#             if adx is not None:
-#                 self.df = pd.concat([self.df, adx], axis=1)
-#         except Exception: pass
-        
-#         # 4. Ichimoku Cloud
-#         try:
-#             ichimoku = self.df.ta.ichimoku()
-#             if ichimoku is not None and len(ichimoku) > 0:
-#                 self.df = pd.concat([self.df, ichimoku[0]], axis=1)
-#         except Exception: pass
-        
-#         # 5. Parabolic SAR
-#         try:
-#             psar = self.df.ta.psar()
-#             if psar is not None:
-#                 self.df = pd.concat([self.df, psar], axis=1)
-#         except Exception: pass
-        
-#         # 6. RSI
-#         for period in [9, 14, 21]:
-#             self.df[f'rsi_{period}'] = self.df.ta.rsi(length=period)
-        
-#         # 7. Stochastic
-#         try:
-#             stoch = self.df.ta.stoch(k=14, d=3)
-#             if stoch is not None:
-#                 self.df = pd.concat([self.df, stoch], axis=1)
-#         except Exception: pass
-        
-#         # 8. Williams %R
-#         self.df['willr'] = self.df.ta.willr(length=14)
-        
-#         # 9. ROC
-#         for period in [9, 14, 21]:
-#             self.df[f'roc_{period}'] = self.df.ta.roc(length=period)
-        
-#         # 10. CCI
-#         self.df['cci'] = self.df.ta.cci(length=20)
-        
-#         # 11. MFI
-#         self.df['mfi'] = self.df.ta.mfi(length=14)
-        
-#         # 12. Bollinger Bands
-#         try:
-#             bbands = self.df.ta.bbands(length=20, std=2)
-#             if bbands is not None:
-#                 self.df = pd.concat([self.df, bbands], axis=1)
-#                 if 'BBU_20_2.0' in self.df.columns and 'BBL_20_2.0' in self.df.columns:
-#                     self.df['bb_width'] = (self.df['BBU_20_2.0'] - self.df['BBL_20_2.0']) / (self.df['BBM_20_2.0'] + 1e-10)
-#         except Exception: pass
-        
-#         # 13. ATR
-#         for period in [7, 14, 21]:
-#             self.df[f'atr_{period}'] = self.df.ta.atr(length=period)
-        
-#         # 14. Keltner Channels
-#         try:
-#             kc = self.df.ta.kc(length=20)
-#             if kc is not None:
-#                 self.df = pd.concat([self.df, kc], axis=1)
-#         except Exception: pass
-        
-#         # 15. Historical Volatility
-#         self.df['hist_vol_20'] = self.df['close'].pct_change().rolling(20).std() * np.sqrt(252)
-        
-#         # 16. Volume SMA
-#         self.df['volume_sma_20'] = self.df['volume'].rolling(20).mean()
-#         self.df['volume_ratio'] = self.df['volume'] / (self.df['volume_sma_20'] + 1e-10)
-        
-#         # 17. OBV
-#         self.df['obv'] = self.df.ta.obv()
-        
-#         # 18. VWAP
-#         try:
-#             if not isinstance(self.df.index, pd.DatetimeIndex):
-#                 self.df.index = pd.to_datetime(self.df.index)
-            
-#             vwap = self.df.ta.vwap()
-#             if isinstance(vwap, pd.Series):
-#                 self.df['vwap'] = vwap
-#             elif isinstance(vwap, pd.DataFrame):
-#                 self.df['vwap'] = vwap.iloc[:, 0]
-#         except Exception:
-#             tp = (self.df['high'] + self.df['low'] + self.df['close']) / 3
-#             self.df['vwap'] = (tp * self.df['volume']).cumsum() / (self.df['volume'].cumsum() + 1e-10)
-        
-#         # 19. Accumulation/Distribution
-#         self.df['ad'] = self.df.ta.ad()
-        
-#         # 20. Chaikin Money Flow
-#         self.df['cmf'] = self.df.ta.cmf(length=20)
-        
-#         # 21. SuperTrend
-#         for mult in [2, 3]:
-#             try:
-#                 st = self.df.ta.supertrend(length=10, multiplier=mult)
-#                 if st is not None:
-#                     self.df = pd.concat([self.df, st.add_suffix(f'_{mult}')], axis=1)
-#             except Exception: pass
-        
-#         return self.df
-
-#     def add_price_patterns(self) -> pd.DataFrame:
-#         """
-#         Advanced candlestick pattern detection.
-#         Uses pure pandas logic where TA-Lib is not available.
-#         """
-#         # Patterns supported by pandas-ta without TA-Lib
-#         # 'doji' and 'inside' are usually available natively.
-#         try:
-#             self.df['cdl_doji'] = self.df.ta.cdl_doji(append=False) / 100.0
-#         except Exception: pass
-
-#         # --- Manual Python Fallbacks for patterns missing in pandas-ta default ---
-#         # These will run if TA-Lib is absent to avoid "[X] pattern not found" errors
-        
-#         O, H, L, C = self.df['open'], self.df['high'], self.df['low'], self.df['close']
-        
-#         # Hammer (approximate logic)
-#         # Small body near top, long lower wick
-#         body = abs(C - O)
-#         lower_wick = np.minimum(C, O) - L
-#         upper_wick = H - np.maximum(C, O)
-#         self.df['cdl_hammer'] = np.where(
-#             (lower_wick > 2 * body) & (upper_wick < 0.2 * body), 1.0, 0.0
-#         )
-
-#         # Inverted Hammer
-#         # Small body near bottom, long upper wick
-#         self.df['cdl_inverted_hammer'] = np.where(
-#             (upper_wick > 2 * body) & (lower_wick < 0.2 * body), 1.0, 0.0
-#         )
-
-#         # Shooting Star
-#         # Same shape as Inverted Hammer but in an uptrend (simplified here to shape)
-#         self.df['cdl_shooting_star'] = self.df['cdl_inverted_hammer'] # Logic context depends on trend usually
-
-#         # Hanging Man
-#         # Same shape as Hammer but in an uptrend
-#         self.df['cdl_hanging_man'] = self.df['cdl_hammer'] 
-
-#         # Marubozu (Long body, very small wicks)
-#         avg_body = body.rolling(20).mean()
-#         self.df['cdl_marubozu'] = np.where(
-#             (body > 2 * avg_body) & (lower_wick < 0.05 * body) & (upper_wick < 0.05 * body), 
-#             np.sign(C - O), 0.0
-#         )
-
-#         # Price Action Features
-#         self.df['body_size'] = abs(self.df['close'] - self.df['open']) / (self.df['close'] + 1e-10)
-#         self.df['swing_high'] = self.df['high'].rolling(window=10, center=True).max()
-#         self.df['swing_low'] = self.df['low'].rolling(window=10, center=True).min()
-#         self.df['gap_up'] = ((self.df['open'] - self.df['close'].shift(1)) / (self.df['close'].shift(1) + 1e-10)) > 0.02
-        
-#         return self.df
-
-#     def add_statistical_features(self) -> pd.DataFrame:
-#         """Statistical features."""
-#         for period in [1, 3, 5, 10, 20]:
-#             self.df[f'return_{period}d'] = self.df['close'].pct_change(period)
-#             self.df[f'log_return_{period}d'] = np.log(self.df['close'] / (self.df['close'].shift(period) + 1e-10))
-        
-#         for window in [5, 10, 20]:
-#             self.df[f'return_mean_{window}'] = self.df['return_1d'].rolling(window).mean()
-#             self.df[f'return_std_{window}'] = self.df['return_1d'].rolling(window).std()
-        
-#         for period in [20, 50]:
-#             mean = self.df['close'].rolling(period).mean()
-#             std = self.df['close'].rolling(period).std()
-#             self.df[f'zscore_{period}'] = (self.df['close'] - mean) / (std + 1e-10)
-        
-#         self.df['momentum_10'] = self.df['close'] - self.df['close'].shift(10)
-#         return self.df
-
-#     def add_market_microstructure(self) -> pd.DataFrame:
-#         """Liquidity features."""
-#         self.df['hl_spread'] = (self.df['high'] - self.df['low']) / (self.df['close'] + 1e-10)
-#         self.df['amihud_ratio'] = abs(self.df['return_1d']) / (self.df['volume'] * self.df['close'] + 1e-10)
-        
-#         if 'vwap' in self.df.columns:
-#             self.df['vwap_deviation'] = (self.df['close'] - self.df['vwap']) / (self.df['vwap'] + 1e-10)
-        
-#         return self.df
-
-#     @lru_cache(maxsize=128)
-#     def get_fundamental_data(self, ticker: str) -> Dict:
-#         """Fetch fundamental data with caching."""
-#         if not ticker: return {}
-#         try:
-#             stock = yf.Ticker(ticker)
-#             info = stock.info
-#             return {
-#                 'market_cap': info.get('marketCap', 0),
-#                 'pe_ratio': info.get('trailingPE', 0),
-#                 'forward_pe': info.get('forwardPE', 0),
-#                 'pb_ratio': info.get('priceToBook', 0),
-#                 'profit_margins': info.get('profitMargins', 0),
-#                 'roe': info.get('returnOnEquity', 0),
-#                 'debt_to_equity': info.get('debtToEquity', 0),
-#                 'revenue_growth': info.get('revenueGrowth', 0),
-#                 'beta': info.get('beta', 1.0)
-#             }
-#         except Exception:
-#             return {}
-
-#     def get_sentiment_analysis(self, ticker: str) -> Dict:
-#         """Basic sentiment analysis."""
-#         if not ticker: return {'sentiment_score': 0}
-#         try:
-#             stock = yf.Ticker(ticker)
-#             news = stock.news
-#             if not news: return {'sentiment_score': 0}
-            
-#             sentiments = []
-#             for article in news[:5]:
-#                 text = f"{article.get('title', '')}. {article.get('summary', '')}"
-#                 blob = TextBlob(text)
-#                 sentiments.append(blob.sentiment.polarity)
-            
-#             return {
-#                 'sentiment_score': np.mean(sentiments) if sentiments else 0,
-#                 'sentiment_std': np.std(sentiments) if len(sentiments) > 1 else 0
-#             }
-#         except Exception:
-#             return {'sentiment_score': 0}
-
-#     def add_fundamental_features(self) -> pd.DataFrame:
-#         if not self.ticker: return self.df
-#         fundamentals = self.get_fundamental_data(self.ticker)
-#         for key, value in fundamentals.items():
-#             self.df[f'fund_{key}'] = value
-#         return self.df
-
-#     def add_sentiment_features(self) -> pd.DataFrame:
-#         if not self.ticker: return self.df
-#         sentiment = self.get_sentiment_analysis(self.ticker)
-#         for key, value in sentiment.items():
-#             self.df[f'sent_{key}'] = value
-#         return self.df
-
-#     def add_target_variables(self, forward_periods: List[int] = [5, 10, 20]) -> pd.DataFrame:
-#         """Create targets for ML models."""
-#         for period in forward_periods:
-#             self.df[f'target_close_{period}d'] = self.df['close'].shift(-period)
-#             self.df[f'target_high_{period}d'] = self.df['high'].rolling(period).max().shift(-period)
-#             self.df[f'target_low_{period}d'] = self.df['low'].rolling(period).min().shift(-period)
-            
-#             # Risk/Reward Targets
-#             max_gain = (self.df[f'target_high_{period}d'] - self.df['close'])
-#             max_loss = (self.df['close'] - self.df[f'target_low_{period}d'])
-#             self.df[f'target_rr_ratio_{period}d'] = max_gain / (max_loss + 1e-10)
-        
-#         if 'atr_14' in self.df.columns:
-#             self.df['suggested_stop_loss'] = self.df['close'] - (2 * self.df['atr_14'])
-        
-#         return self.df
-
-#     def add_lag_features(self, lags: List[int] = [1, 2, 3, 5]) -> pd.DataFrame:
-#         """Add lagged features."""
-#         features_to_lag = ['close', 'volume', 'rsi_14', 'atr_14']
-#         for feature in features_to_lag:
-#             if feature in self.df.columns:
-#                 for lag in lags:
-#                     self.df[f'{feature}_lag_{lag}'] = self.df[feature].shift(lag)
-#         return self.df
-
-#     def handle_missing_values(self) -> pd.DataFrame:
-#         """Fill NaNs and remove infinite values."""
-#         self.df = self.df.replace([np.inf, -np.inf], np.nan)
-#         self.df = self.df.ffill().bfill().fillna(0)
-#         return self.df
-
-#     def build_features(self, 
-#                        include_fundamentals: bool = True,
-#                        include_sentiment: bool = True,
-#                        include_targets: bool = True) -> pd.DataFrame:
-#         """
-#         Master execution method.
-#         Returns DataFrame with 'date' as a column (Index Reset).
-#         """
-#         self.add_technical_indicators()
-#         self.add_price_patterns()
-#         self.add_statistical_features()
-#         self.add_market_microstructure()
-#         self.add_lag_features()
-        
-#         if include_fundamentals and self.ticker:
-#             self.add_fundamental_features()
-        
-#         if include_sentiment and self.ticker:
-#             self.add_sentiment_features()
-        
-#         if include_targets:
-#             self.add_target_variables()
-        
-#         self.handle_missing_values()
-        
-#         # Important: Reset index so 'date' is a column
-#         self.df.reset_index(inplace=True)
-        
-#         # CRITICAL FIX: Remove duplicate columns
-#         # Some indicators may produce duplicate column names (e.g. ISA_9)
-#         # This deduplicates columns, keeping the first occurrence.
-#         self.df = self.df.loc[:, ~self.df.columns.duplicated()]
-        
-#         return self.df
-
-
-# class PipelineOrchestrator:
-#     """Manages Database Connections and Batch Processing"""
-    
-#     def __init__(self, db_url: str):
-#         self.engine = create_engine(db_url, pool_pre_ping=True)
-#         self.table_name = 'engineered_features'
-
-#     def get_all_tickers(self) -> List[str]:
-#         """Fetch unique tickers from DB."""
-#         try:
-#             with self.engine.connect() as conn:
-#                 result = conn.execute(text("SELECT DISTINCT ticker FROM nse_stocks ORDER BY ticker"))
-#                 return [row[0] for row in result]
-#         except Exception as e:
-#             logger.error(f"Failed to fetch tickers: {e}")
-#             return []
-
-#     def get_stock_data(self, ticker: str) -> pd.DataFrame:
-#         """Fetch data for ticker."""
-#         query = text("""
-#             SELECT date, open, high, low, close, volume, adj_close
-#             FROM nse_stocks 
-#             WHERE ticker = :ticker 
-#             ORDER BY date ASC
-#         """)
-#         return pd.read_sql(query, self.engine, params={'ticker': ticker})
-
-#     def sync_table_schema(self, df: pd.DataFrame, inspector):
-#         """
-#         Ensures DB table has all columns present in DataFrame.
-#         Adds missing columns dynamically.
-#         """
-#         try:
-#             # Get existing columns in DB
-#             existing_columns = [col['name'] for col in inspector.get_columns(self.table_name)]
-            
-#             # Identify missing columns
-#             df_columns = list(df.columns)
-#             missing_cols = [col for col in df_columns if col not in existing_columns]
-            
-#             if missing_cols:
-#                 logger.info(f"Syncing schema: Adding {len(missing_cols)} new columns to {self.table_name}")
-#                 with self.engine.begin() as conn:
-#                     for col in missing_cols:
-#                         # Map pandas types to SQL types generically
-#                         dtype = df[col].dtype
-#                         if pd.api.types.is_integer_dtype(dtype):
-#                             sql_type = "BIGINT"
-#                         elif pd.api.types.is_float_dtype(dtype):
-#                             sql_type = "DOUBLE PRECISION"
-#                         elif pd.api.types.is_datetime64_any_dtype(dtype):
-#                             sql_type = "TIMESTAMP"
-#                         elif pd.api.types.is_bool_dtype(dtype):
-#                             sql_type = "BOOLEAN"
-#                         else:
-#                             sql_type = "TEXT"
-                            
-#                         # Add column - Use quote identifier to handle special chars/case
-#                         conn.execute(text(f'ALTER TABLE "{self.table_name}" ADD COLUMN "{col}" {sql_type}'))
-#         except Exception as e:
-#             logger.error(f"Schema sync failed: {e}")
-#             raise
-
-#     def save_features(self, df: pd.DataFrame):
-#         """
-#         Save features to DB with Schema Evolution and Safe Writes.
-#         1. Deduplicates DataFrame columns.
-#         2. Checks if table exists (Creates if not).
-#         3. Syncs schema (Adds new columns if DF has them).
-#         4. Deletes old records for the specific ticker (Deduplication).
-#         5. Inserts new records.
-#         """
-#         if df.empty: return
-        
-#         # Double check deduplication before any DB op
-#         df = df.loc[:, ~df.columns.duplicated()]
-        
-#         ticker = df['ticker'].iloc[0]
-#         inspector = inspect(self.engine)
-        
-#         try:
-#             # 1. Check Table Existence
-#             if not inspector.has_table(self.table_name):
-#                 logger.info(f"Table {self.table_name} does not exist. Creating...")
-#                 # Use DataFrame to create initial table structure
-#                 # We use duplicated check here too just in case
-#                 df.head(0).to_sql(self.table_name, self.engine, if_exists='replace', index=False)
-                
-#                 # Add constraints/indexes immediately after creation
-#                 with self.engine.begin() as conn:
-#                     conn.execute(text(f"""
-#                         ALTER TABLE "{self.table_name}" 
-#                         ADD CONSTRAINT pk_engineered_features PRIMARY KEY (ticker, date);
-#                     """))
-#                     conn.execute(text(f"""
-#                         CREATE INDEX IF NOT EXISTS idx_ef_ticker ON "{self.table_name}" (ticker);
-#                     """))
-#             else:
-#                 # 2. Sync Schema (Add missing columns)
-#                 self.sync_table_schema(df, inspector)
-
-#             # 3. Deduplicate (Delete existing data for this ticker)
-#             # Wrapped in try-except to handle race conditions or phantom tables
-#             try:
-#                 with self.engine.begin() as conn:
-#                     conn.execute(
-#                         text(f'DELETE FROM "{self.table_name}" WHERE ticker = :ticker'),
-#                         {'ticker': ticker}
-#                     )
-#             except ProgrammingError:
-#                 # If delete fails due to table missing (race condition), ignore and proceed to insert
-#                 logger.warning(f"Delete failed for {ticker}, table might have been dropped. Proceeding to insert.")
-
-#             # 4. Insert Data
-#             df.to_sql(
-#                 self.table_name, 
-#                 self.engine, 
-#                 if_exists='append', 
-#                 index=False, 
-#                 method='multi', 
-#                 chunksize=500
-#             )
-            
-#         except Exception as e:
-#             logger.error(f"Failed to save features for {ticker}: {e}")
-#             raise e
-
-#     def run_pipeline(self):
-#         """Run pipeline for all stocks."""
-#         tickers = self.get_all_tickers()
-        
-#         if not tickers:
-#             logger.error("No tickers found in database.")
-#             return
-
-#         logger.info(f"[START] Feature Engineering Pipeline for {len(tickers)} stocks")
-        
-#         success_count = 0
-#         error_count = 0
-        
-#         pbar = tqdm(tickers, desc="Processing")
-        
-#         for ticker in pbar:
-#             try:
-#                 # 1. Fetch Data
-#                 df_raw = self.get_stock_data(ticker)
-                
-#                 if df_raw.empty or len(df_raw) < 50:
-#                     continue
-                
-#                 # 2. Process
-#                 engineer = StockFeatureEngineer(df_raw, ticker=ticker)
-                
-#                 # Skipping external API calls for bulk speed
-#                 df_features = engineer.build_features(
-#                     include_fundamentals=False,
-#                     include_sentiment=False,
-#                     include_targets=True
-#                 )
-                
-#                 # 3. Add Ticker Column
-#                 if 'ticker' not in df_features.columns:
-#                     df_features['ticker'] = ticker
-                
-#                 # CRITICAL CHANGE: Keep only the latest row (Snapshot Logic)
-#                 # Since we calculated features using history, taking the last row gives
-#                 # us the "Latest Date" features.
-#                 df_features = df_features.iloc[[-1]]
-                
-#                 # 4. Save
-#                 self.save_features(df_features)
-#                 success_count += 1
-                
-#             except Exception as e:
-#                 # Log to file, keep console clean
-#                 logger.debug(f"Error processing {ticker}: {e}")
-#                 error_count += 1
-        
-#         logger.info(f"[DONE] Success: {success_count}, Errors: {error_count}")
-
-
-# if __name__ == "__main__":
-#     try:
-#         pipeline = PipelineOrchestrator(DB_URL)
-#         pipeline.run_pipeline()
-#     except Exception as e:
-#         logger.critical(f"Critical Failure: {e}")
-
-
-
-
-
-# import pandas as pd
-# import pandas_ta as ta
-# import yfinance as yf
-# from textblob import TextBlob
-# import numpy as np
-# from typing import Dict, List, Optional, Set
-# import logging
-# import warnings
-# from functools import lru_cache
-# from sqlalchemy import create_engine, text, inspect
-# from sqlalchemy.dialects.postgresql import insert
-# from tqdm import tqdm
-# import concurrent.futures
-# import multiprocessing
-
-# # --- CONFIGURATION ---
-# DB_URL = "postgresql://postgres:Taran%4017@localhost:5432/StockDB"
-
-# # --- SETUP ---
-# warnings.filterwarnings('ignore')
-
-# # Configure logging
-# # Note: In multiprocessing, logging to a single file can be tricky. 
-# # We rely on the main process to handle the primary logs or file locking.
-# logging.basicConfig(
-#     level=logging.INFO,
-#     format='%(asctime)s - %(levelname)s - %(message)s',
-#     handlers=[
-#         logging.FileHandler('feature_engineering.log'),
-#         logging.StreamHandler()
-#     ]
-# )
-# logger = logging.getLogger(__name__)
-
-# class StockFeatureEngineer:
-#     """
-#     Production-grade feature engineering pipeline.
-#     Calculates Technical, Statistical, and Fundamental features.
-#     """
-    
-#     def __init__(self, df: pd.DataFrame, ticker: str = None):
-#         # 1. Column Standardization
-#         df.columns = [c.lower() for c in df.columns]
-        
-#         required_cols = ['date', 'open', 'high', 'low', 'close', 'volume']
-#         missing_cols = [col for col in required_cols if col not in df.columns]
-#         if missing_cols:
-#             raise ValueError(f"Missing required columns: {missing_cols}")
-        
-#         self.df = df.copy()
-#         self.ticker = ticker
-        
-#         # 2. Date Handling
-#         self.df['date'] = pd.to_datetime(self.df['date'])
-#         self.df.set_index('date', inplace=True)
-#         self.df.sort_index(inplace=True)
-        
-#         # 3. Handle Duplicate Indices
-#         if not self.df.index.is_unique:
-#             self.df = self.df.loc[~self.df.index.duplicated(keep='first')]
-
-#         # 4. Set 'price' column
-#         self.df['price'] = self.df.get('adj_close', self.df['close'])
-        
-#         self.target_cols = []
-
-#     def add_technical_indicators(self) -> pd.DataFrame:
-#         try:
-#             # Moving Averages
-#             for period in [5, 10, 20, 50, 100, 200]:
-#                 self.df[f'sma_{period}'] = self.df.ta.sma(length=period)
-#                 self.df[f'ema_{period}'] = self.df.ta.ema(length=period)
-            
-#             # MACD
-#             macd = self.df.ta.macd(fast=12, slow=26, signal=9)
-#             if macd is not None: self.df = pd.concat([self.df, macd], axis=1)
-            
-#             # ADX
-#             adx = self.df.ta.adx(length=14)
-#             if adx is not None: self.df = pd.concat([self.df, adx], axis=1)
-            
-#             # RSI
-#             self.df['rsi_14'] = self.df.ta.rsi(length=14)
-            
-#             # Bollinger Bands
-#             bbands = self.df.ta.bbands(length=20, std=2)
-#             if bbands is not None: 
-#                 self.df = pd.concat([self.df, bbands], axis=1)
-#                 if 'BBU_20_2.0' in self.df.columns and 'BBL_20_2.0' in self.df.columns:
-#                     self.df['bb_width'] = (self.df['BBU_20_2.0'] - self.df['BBL_20_2.0']) / (self.df['BBM_20_2.0'] + 1e-10)
-
-#             # ATR
-#             self.df['atr_14'] = self.df.ta.atr(length=14)
-
-#             # Volume Indicators
-#             self.df['obv'] = self.df.ta.obv()
-#             self.df['vwap'] = self.df.ta.vwap()
-            
-#         except Exception as e:
-#             # Silent fail for indicators to keep logs clean in parallel mode
-#             pass
-        
-#         return self.df
-
-#     def add_advanced_oscillators(self) -> pd.DataFrame:
-#         try:
-#             # Aroon
-#             aroon = self.df.ta.aroon(length=25)
-#             if aroon is not None:
-#                 self.df = pd.concat([self.df, aroon], axis=1)
-#                 if 'AROONU_25' in self.df.columns and 'AROOND_25' in self.df.columns:
-#                     self.df['aroon_osc'] = self.df['AROONU_25'] - self.df['AROOND_25']
-
-#             # Stochastic
-#             stoch = self.df.ta.stoch(k=14, d=3, smooth_k=3)
-#             if stoch is not None:
-#                 self.df = pd.concat([self.df, stoch], axis=1)
-
-#             # CCI
-#             self.df['cci_20'] = self.df.ta.cci(length=20)
-            
-#             # ROC
-#             self.df['roc_10'] = self.df.ta.roc(length=10)
-
-#         except Exception:
-#             pass
-            
-#         return self.df
-
-#     def add_price_patterns(self) -> pd.DataFrame:
-#         try:
-#             self.df['cdl_doji'] = self.df.ta.cdl_doji(append=False) / 100.0
-#         except Exception: pass
-
-#         O, H, L, C = self.df['open'], self.df['high'], self.df['low'], self.df['close']
-#         body = abs(C - O)
-        
-#         self.df['gap_up'] = ((O - C.shift(1)) / (C.shift(1) + 1e-10)) > 0.005
-#         self.df['gap_down'] = ((O - C.shift(1)) / (C.shift(1) + 1e-10)) < -0.005
-        
-#         self.df['body_size'] = body / (C + 1e-10)
-#         self.df['upper_wick'] = H - np.maximum(O, C)
-#         self.df['lower_wick'] = np.minimum(O, C) - L
-        
-#         return self.df
-
-#     def add_statistical_features(self) -> pd.DataFrame:
-#         for period in [1, 3, 5, 10, 20]:
-#             self.df[f'return_{period}d'] = self.df['close'].pct_change(period)
-#             self.df[f'log_return_{period}d'] = np.log(self.df['close'] / (self.df['close'].shift(period) + 1e-10))
-        
-#         self.df['hist_vol_20'] = self.df['close'].pct_change().rolling(20).std() * np.sqrt(252)
-        
-#         for period in [20, 50]:
-#             mean = self.df['close'].rolling(period).mean()
-#             std = self.df['close'].rolling(period).std()
-#             self.df[f'zscore_{period}'] = (self.df['close'] - mean) / (std + 1e-10)
-            
-#         return self.df
-
-#     @lru_cache(maxsize=128)
-#     def get_fundamental_data(self, ticker: str) -> Dict:
-#         if not ticker: return {}
-#         try:
-#             # FIX: Append .NS for NSE stocks
-#             search_ticker = ticker
-#             if not search_ticker.endswith('.NS') and not search_ticker.endswith('.BO'):
-#                 search_ticker = f"{ticker}.NS"
-
-#             stock = yf.Ticker(search_ticker)
-#             info = stock.info
-            
-#             keys = ['marketCap', 'trailingPE', 'forwardPE', 'priceToBook', 'beta', 'returnOnEquity']
-#             return {f"fund_{k}": info.get(k, 0) for k in keys}
-#         except Exception:
-#             return {}
-
-#     def add_target_variables(self, forward_periods: List[int] = [1, 5]) -> pd.DataFrame:
-#         for period in forward_periods:
-#             col_name = f'target_return_{period}d'
-#             self.df[col_name] = self.df['close'].shift(-period) / self.df['close'] - 1
-#             self.target_cols.append(col_name)
-
-#             col_class = f'target_is_up_{period}d'
-#             self.df[col_class] = (self.df[col_name] > 0).astype(float)
-#             self.df.loc[self.df.index[-period:], col_class] = np.nan
-#             self.target_cols.append(col_class)
-
-#         return self.df
-
-#     def handle_missing_values(self) -> pd.DataFrame:
-#         self.df = self.df.replace([np.inf, -np.inf], np.nan)
-#         feature_cols = [c for c in self.df.columns if c not in self.target_cols]
-#         self.df[feature_cols] = self.df[feature_cols].ffill().fillna(0)
-#         return self.df
-
-#     def build_features(self, include_fundamentals: bool = True) -> pd.DataFrame:
-#         self.add_technical_indicators()
-#         self.add_advanced_oscillators()
-#         self.add_price_patterns()
-#         self.add_statistical_features()
-        
-#         if include_fundamentals and self.ticker:
-#             fundamentals = self.get_fundamental_data(self.ticker)
-#             for k, v in fundamentals.items():
-#                 self.df[k] = v
-        
-#         self.add_target_variables()
-#         self.handle_missing_values()
-        
-#         self.df.reset_index(inplace=True)
-#         self.df = self.df.loc[:, ~self.df.columns.duplicated()]
-        
-#         return self.df
-
-
-# class PipelineOrchestrator:
-#     """Manages Database Connections and Pipeline Execution."""
-    
-#     def __init__(self, db_url: str):
-#         self.engine = create_engine(db_url, pool_pre_ping=True)
-#         self.table_name = 'engineered_features'
-#         self.known_columns: Set[str] = set()
-#         self._initialize_schema_knowledge()
-
-#     def _initialize_schema_knowledge(self):
-#         inspector = inspect(self.engine)
-#         if inspector.has_table(self.table_name):
-#             self.known_columns = {col['name'] for col in inspector.get_columns(self.table_name)}
-#         else:
-#             self.known_columns = set()
-
-#     def ensure_table_structure(self, df_sample: pd.DataFrame):
-#         """Creates table structure based on a sample dataframe to prevent race conditions."""
-#         if df_sample.empty: return
-#         self.sync_table_schema(df_sample)
-
-#     def get_all_tickers(self) -> List[str]:
-#         try:
-#             with self.engine.connect() as conn:
-#                 result = conn.execute(text("SELECT DISTINCT ticker FROM nse_stocks ORDER BY ticker"))
-#                 return [row[0] for row in result]
-#         except Exception as e:
-#             logger.error(f"Failed to fetch tickers: {e}")
-#             return []
-
-#     def get_stock_data(self, ticker: str) -> pd.DataFrame:
-#         query = text("""
-#             SELECT date, open, high, low, close, volume, adj_close
-#             FROM nse_stocks 
-#             WHERE ticker = :ticker 
-#             ORDER BY date ASC
-#         """)
-#         return pd.read_sql(query, self.engine, params={'ticker': ticker})
-
-#     def get_latest_db_date(self, ticker: str) -> Optional[pd.Timestamp]:
-#         try:
-#             if not self.known_columns: 
-#                 return None
-#             with self.engine.connect() as conn:
-#                 query = text(f'SELECT MAX(date) FROM "{self.table_name}" WHERE ticker = :ticker')
-#                 result = conn.execute(query, {'ticker': ticker}).fetchone()
-#                 if result and result[0]:
-#                     return pd.to_datetime(result[0])
-#             return None
-#         except Exception:
-#             return None
-
-#     def sync_table_schema(self, df: pd.DataFrame):
-#         if df.empty: return
-#         current_cols = set(df.columns)
-#         new_cols = current_cols - self.known_columns
-        
-#         if not new_cols: return
-
-#         if not self.known_columns:
-#             # logger.info(f"Creating table {self.table_name}")
-#             df.head(0).to_sql(self.table_name, self.engine, if_exists='replace', index=False)
-#             with self.engine.begin() as conn:
-#                 conn.execute(text(f"""
-#                     ALTER TABLE "{self.table_name}" 
-#                     ADD CONSTRAINT pk_engineered_features PRIMARY KEY (ticker, date);
-#                 """))
-#             self.known_columns = current_cols
-#             return
-
-#         with self.engine.begin() as conn:
-#             for col in new_cols:
-#                 # logger.info(f"Adding new column: {col}")
-#                 dtype = df[col].dtype
-#                 sql_type = "TEXT"
-#                 if pd.api.types.is_integer_dtype(dtype): sql_type = "BIGINT"
-#                 elif pd.api.types.is_float_dtype(dtype): sql_type = "DOUBLE PRECISION"
-#                 elif pd.api.types.is_datetime64_any_dtype(dtype): sql_type = "TIMESTAMP"
-#                 elif pd.api.types.is_bool_dtype(dtype): sql_type = "BOOLEAN"
-                
-#                 try:
-#                     conn.execute(text(f'ALTER TABLE "{self.table_name}" ADD COLUMN "{col}" {sql_type}'))
-#                 except Exception:
-#                     # Ignore error if column was added by another process
-#                     pass
-        
-#         self.known_columns.update(new_cols)
-
-#     def save_features_incremental(self, df: pd.DataFrame):
-#         if df.empty: return
-#         ticker = df['ticker'].iloc[0]
-#         latest_date = self.get_latest_db_date(ticker)
-#         self.sync_table_schema(df)
-        
-#         if latest_date:
-#             df_new = df[df['date'] > latest_date]
-#             if not df_new.empty:
-#                 try:
-#                     df_new.to_sql(self.table_name, self.engine, if_exists='append', index=False, method='multi', chunksize=1000)
-#                 except Exception:
-#                     pass
-#         else:
-#             self.save_features_upsert(df)
-
-#     def save_features_upsert(self, df: pd.DataFrame):
-#         if df.empty: return
-#         self.sync_table_schema(df)
-#         try:
-#             with self.engine.begin() as conn:
-#                 conn.execute(text(f'DELETE FROM "{self.table_name}" WHERE ticker = :ticker'), {'ticker': df['ticker'].iloc[0]})
-#                 df.to_sql(self.table_name, conn, if_exists='append', index=False, method='multi', chunksize=1000)
-#         except Exception as e:
-#             logger.error(f"Save failed for {df['ticker'].iloc[0]}: {e}")
-
-# # --- GLOBAL WORKER FUNCTION FOR MULTIPROCESSING ---
-# def process_ticker_safe(ticker: str, db_url: str, incremental: bool):
-#     """
-#     Isolated worker function to process a single ticker.
-#     Has its own database connection to avoid conflict.
-#     """
-#     try:
-#         # 1. Setup isolated orchestrator
-#         local_orch = PipelineOrchestrator(db_url)
-        
-#         # 2. Fetch Data
-#         df_raw = local_orch.get_stock_data(ticker)
-#         if len(df_raw) < 200:
-#             return False
-            
-#         # 3. Engineer Features
-#         engineer = StockFeatureEngineer(df_raw, ticker=ticker)
-#         # Setting include_fundamentals=True calls Yahoo API. 
-#         # CAUTION: Yahoo might rate limit if max_workers is too high (>10).
-#         df_features = engineer.build_features(include_fundamentals=True)
-        
-#         if 'ticker' not in df_features.columns:
-#             df_features['ticker'] = ticker
-            
-#         # 4. Save
-#         if incremental:
-#             local_orch.save_features_incremental(df_features)
-#         else:
-#             local_orch.save_features_upsert(df_features)
-            
-#         return True
-#     except Exception as e:
-#         # logger.error(f"Worker failed on {ticker}: {e}")
-#         return False
-
-# def run_multiprocess_pipeline(db_url, incremental=True):
-#     """
-#     Main entry point for parallel processing.
-#     """
-#     # 1. Initialize Main Orchestrator
-#     main_orch = PipelineOrchestrator(db_url)
-#     tickers = main_orch.get_all_tickers()
-    
-#     if not tickers:
-#         logger.error("No tickers found.")
-#         return
-
-#     logger.info(f"Starting {'INCREMENTAL' if incremental else 'FULL'} pipeline for {len(tickers)} stocks with Multiprocessing...")
-
-#     # 2. PRE-WARM: Ensure Table Structure Exists
-#     # We process ONE ticker linearly first to create the table/columns.
-#     # This prevents 8 processes from trying to create the table simultaneously (Race Condition).
-#     logger.info("Pre-warming schema with first ticker...")
-#     try:
-#         process_ticker_safe(tickers[0], db_url, incremental)
-#         tickers = tickers[1:] # Remove the first one since it's done
-#     except Exception as e:
-#         logger.error(f"Pre-warm failed: {e}")
-
-#     # 3. Start Pool
-#     # max_workers = number of CPU cores. Adjust if you hit Yahoo Rate Limits.
-#     max_workers = min(multiprocessing.cpu_count(), 8) 
-    
-#     success_count = 1 # We already did one
-    
-#     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-#         # Map futures to tickers
-#         future_to_ticker = {
-#             executor.submit(process_ticker_safe, ticker, db_url, incremental): ticker 
-#             for ticker in tickers
-#         }
-        
-#         # Monitor Progress
-#         for future in tqdm(concurrent.futures.as_completed(future_to_ticker), total=len(tickers), desc="Parallel Processing"):
-#             ticker = future_to_ticker[future]
-#             try:
-#                 if future.result():
-#                     success_count += 1
-#             except Exception as e:
-#                 logger.error(f"Ticker {ticker} generated an exception: {e}")
-
-#     logger.info(f"Pipeline Completed. Processed: {success_count}")
-
-# if __name__ == "__main__":
-#     try:
-#         # Run with incremental=True for daily updates (Appends new data)
-#         # Run with incremental=False for full reload (Wipes and rebuilds)
-#         run_multiprocess_pipeline(DB_URL, incremental=True)
-#     except Exception as e:
-#         logger.critical(f"Critical Failure: {e}")
-
-
-
-
-
-
-
-
-
-
 import pandas as pd
 import pandas_ta as ta
 import yfinance as yf
@@ -1608,7 +29,7 @@ except ImportError:
     TextBlob = None
 
 # --- CONFIGURATION ---
-DB_URL = "postgresql://postgres:Taran%4017@localhost:5432/StockDB"
+DB_URL = os.getenv("DATABASE_URL", "")
 ENABLE_FUNDAMENTALS_IN_MULTIPROCESS = False
 
 # --- SETUP ---
@@ -1626,6 +47,7 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 
 class StockFeatureEngineer:
     """
@@ -1802,13 +224,25 @@ class StockFeatureEngineer:
             info = stock.info
             
             keys = ['marketCap', 'trailingPE', 'forwardPE', 'priceToBook', 'beta', 'returnOnEquity']
-            return {f"fund_{k}": info.get(k, 0) for k in keys}
+            data = {f"fund_{k}": info.get(k, 0) for k in keys}
+            
+            # Piotroski F-Score (v52: Integrate fundamental blocking)
+            try:
+                from FundamentalAnalysis import get_fundamental_analyzer
+                analyzer = get_fundamental_analyzer()
+                # pass ticker as symbol, empty exchange because suffix is already appended
+                p_res = analyzer.calculate_piotroski_score(search_ticker, exchange="")
+                data['fund_piotroski'] = p_res['piotroski_score'] if p_res else 5
+            except Exception:
+                data['fund_piotroski'] = 5
+                
+            return data
         except KeyboardInterrupt:
             return {}
         except Exception:
             return {}
 
-    def add_target_variables(self, forward_periods: List[int] = [1, 5]) -> pd.DataFrame:
+    def add_target_variables(self, forward_periods: List[int] = [1, 5, 20]) -> pd.DataFrame:
         for period in forward_periods:
             col_name = f'target_return_{period}d'
             self.df[col_name] = self.df['close'].shift(-period) / self.df['close'] - 1
@@ -1982,6 +416,153 @@ class StockFeatureEngineer:
         
         return metrics
 
+    def _get_frac_diff_weights(self, d: float, size: int) -> np.ndarray:
+        weights = [1.]
+        for k in range(1, size):
+            w = -weights[-1] * (d - k + 1) / k
+            weights.append(w)
+        return np.array(weights).reshape(-1, 1)
+
+    def _frac_diff_series(self, series: pd.Series, d: float, thres: float = 0.01) -> pd.Series:
+        weights = self._get_frac_diff_weights(d, len(series))
+        weights_subset = weights[np.abs(weights) >= thres]
+        w_len = len(weights_subset)
+        
+        diff_series = pd.Series(index=series.index, dtype=float)
+        series_vals = series.values
+        # Apply weights to window
+        for i in range(w_len - 1, len(series)):
+            window = series_vals[i - w_len + 1 : i + 1][::-1]
+            diff_series.iloc[i] = np.dot(window, weights_subset)
+        return diff_series
+
+    def add_fractional_features(self) -> pd.DataFrame:
+        try:
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                if col in self.df.columns:
+                    try:
+                        self.df[f'{col}_frac_0.4'] = self._frac_diff_series(self.df[col], d=0.4, thres=1e-3)
+                    except Exception as e:
+                        logger.warning(f"Failed to calculate frac diff for {col} on {self.ticker}: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error in add_fractional_features for {self.ticker}: {e}")
+        return self.df
+
+    def add_hmm_regimes(self) -> pd.DataFrame:
+        """
+        v64 FIX: HMM regimes with expanding-window fit to prevent look-ahead bias.
+        
+        Previously, RobustScaler and GaussianHMM.fit() were applied to the ENTIRE
+        time series, leaking future returns/volatility into past rows' regime labels.
+        Now we use a minimum warm-up window and re-fit periodically (every 60 days)
+        using only data up to that point.
+        """
+        try:
+            from hmmlearn.hmm import GaussianHMM
+            from sklearn.preprocessing import RobustScaler
+            
+            returns = self.df['close'].pct_change().dropna()
+            volatility = returns.rolling(window=10).std().dropna()
+            
+            common_idx = returns.index.intersection(volatility.index)
+            if len(common_idx) < 120:
+                logger.warning(f"Not enough data for HMM regimes for {self.ticker}")
+                return self.df
+            
+            returns_vals = returns.loc[common_idx].values
+            vol_vals = volatility.loc[common_idx].values
+            
+            # Suppress hmmlearn warnings (like non-convergence)
+            import logging
+            logging.getLogger("hmmlearn").setLevel(logging.CRITICAL)
+            
+            # Expanding-window HMM: fit on data[0:t] to predict regime at time t
+            min_warmup = 120  # Minimum days before first regime prediction
+            refit_interval = 60  # Re-fit HMM every 60 days for efficiency
+            latent_states = np.full(len(common_idx), -1, dtype=np.int32)
+            
+            last_model = None
+            last_scaler = None
+            
+            for t in range(min_warmup, len(common_idx)):
+                if last_model is None or (t - min_warmup) % refit_interval == 0:
+                    # Fit on data up to time t only (no look-ahead)
+                    X_train = np.column_stack([returns_vals[:t], vol_vals[:t]])
+                    last_scaler = RobustScaler().fit(X_train)
+                    X_scaled = last_scaler.transform(X_train)
+                    
+                    last_model = GaussianHMM(n_components=4, covariance_type="full",
+                                             n_iter=100, random_state=42)
+                    try:
+                        last_model.fit(X_scaled)
+                    except Exception:
+                        continue
+                
+                if last_model is not None and last_scaler is not None:
+                    X_point = np.column_stack([returns_vals[t:t+1], vol_vals[t:t+1]])
+                    X_point_scaled = last_scaler.transform(X_point)
+                    try:
+                        latent_states[t] = last_model.predict(X_point_scaled)[0]
+                    except Exception:
+                        latent_states[t] = 0
+            
+            # Assign regimes (rows before warmup stay as -1 / NaN)
+            regime_series = pd.Series(latent_states, index=common_idx)
+            regime_series = regime_series.replace(-1, np.nan)
+            self.df['hmm_regime'] = regime_series
+            
+            for i in range(4):
+                self.df[f'hmm_regime_{i}'] = (self.df['hmm_regime'] == i).astype(float)
+                
+        except Exception as e:
+            logger.error(f"Failed to calculate HMM regimes for {self.ticker}: {e}")
+        return self.df
+
+
+    def add_sentiment_features(self) -> pd.DataFrame:
+        if not self.ticker:
+            return self.df
+        try:
+            from SentimentEngine import get_sentiment_features
+            sentiment = get_sentiment_features(self.ticker)
+            for key, value in sentiment.items():
+                self.df[f'sent_{key}'] = value
+        except Exception as e:
+            logger.warning(f"Failed to add sentiment features for {self.ticker}: {e}")
+        return self.df
+
+    def add_macroeconomic_features(self) -> pd.DataFrame:
+        try:
+            tickers = ['^INDIAVIX', 'USDINR=X', '^TNX']
+            df_idx = self.df.index.tz_localize(None) if self.df.index.tz is not None else self.df.index
+            end_date = df_idx.max() + pd.Timedelta(days=1)
+            start_date = df_idx.min() - pd.Timedelta(days=10)
+            
+            macro_data = yf.download(tickers, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), progress=False)
+            
+            if 'Close' in macro_data.columns:
+                close_data = macro_data['Close']
+            else:
+                close_data = macro_data
+                
+            close_data = close_data.ffill()
+            
+            macro_cols = {
+                '^INDIAVIX': 'macro_india_vix',
+                'USDINR=X': 'macro_usdinr',
+                '^TNX': 'macro_us_10y_yield'
+            }
+            
+            for yf_ticker, new_col in macro_cols.items():
+                if yf_ticker in close_data.columns:
+                    aligned_series = close_data[yf_ticker].reindex(df_idx, method='ffill')
+                    self.df[new_col] = aligned_series.values
+                    
+        except Exception as e:
+            logger.warning(f"Failed to fetch macroeconomic features for {self.ticker}: {e}")
+        
+        return self.df
+
     def build_features(self, include_fundamentals: bool = True) -> pd.DataFrame:
         """Build features with comprehensive validation and quality checks"""
         try:
@@ -1989,6 +570,10 @@ class StockFeatureEngineer:
             self.add_advanced_oscillators()
             self.add_price_patterns()
             self.add_statistical_features()
+            self.add_fractional_features()
+            self.add_hmm_regimes()
+            self.add_sentiment_features()
+            self.add_macroeconomic_features()
             
             # Run validations
             ma_validation = self._validate_moving_averages()
@@ -2012,7 +597,12 @@ class StockFeatureEngineer:
                 try:
                     fundamentals = self.get_fundamental_data(self.ticker)
                     for k, v in fundamentals.items():
-                        self.df[k] = v
+                        # v64 FIX: Suffix static fundamentals so MLPredictor can exclude
+                        # them from training (they are current-day snapshots backcasted
+                        # across ALL historical rows, creating severe look-ahead bias).
+                        # These are still useful for LIVE inference where current values
+                        # are appropriate context.
+                        self.df[f'{k}_static'] = v
                 except Exception as e:
                     logger.warning(f"Failed to fetch fundamentals for {self.ticker}: {e}")
             
@@ -2150,7 +740,9 @@ class PipelineOrchestrator:
                 elif pd.api.types.is_bool_dtype(dtype): sql_type = "BOOLEAN"
                 
                 try:
-                    conn.execute(text(f'ALTER TABLE "{self.table_name}" ADD COLUMN "{col}" {sql_type}'))
+                    safe_col = "".join(c for c in col if c.isalnum() or c == '_')
+                    if safe_col:
+                        conn.execute(text(f'ALTER TABLE "{self.table_name}" ADD COLUMN "{safe_col}" {sql_type}'))
                 except Exception:
                     # Ignore error if column was added by another process
                     pass
@@ -2188,10 +780,29 @@ class PipelineOrchestrator:
             logger.debug(f"Upsert data for {ticker}: shape={df.shape}, non-null=[{non_null_counts['date']}/{non_null_counts['close']}/{non_null_counts.get('rsi_14', 0)}]")
             
             with self.engine.begin() as conn:
-                # Delete old data for this ticker
-                conn.execute(text(f'DELETE FROM "{self.table_name}" WHERE ticker = :ticker'), {'ticker': ticker})
-                # Insert new data
-                df.to_sql(self.table_name, conn, if_exists='append', index=False, method='multi', chunksize=1000)
+                temp_table = f"temp_{self.table_name}_upsert"
+                df.head(0).to_sql(temp_table, conn, if_exists='replace', index=False)
+                df.to_sql(temp_table, conn, if_exists='append', index=False, method='multi', chunksize=1000)
+                
+                cols = [c for c in df.columns if c not in ['ticker', 'date']]
+                update_set = ", ".join([f'"{c}" = EXCLUDED."{c}"' for c in cols])
+                cols_csv = ", ".join([f'"{c}"' for c in df.columns])
+                
+                if cols:
+                    upsert_query = f"""
+                        INSERT INTO "{self.table_name}" ({cols_csv})
+                        SELECT {cols_csv} FROM "{temp_table}"
+                        ON CONFLICT (ticker, date) DO UPDATE SET {update_set};
+                    """
+                else:
+                    upsert_query = f"""
+                        INSERT INTO "{self.table_name}" ({cols_csv})
+                        SELECT {cols_csv} FROM "{temp_table}"
+                        ON CONFLICT (ticker, date) DO NOTHING;
+                    """
+                
+                conn.execute(text(upsert_query))
+                conn.execute(text(f'DROP TABLE "{temp_table}"'))
                 logger.info(f"Upserted {len(df)} records for {ticker}")
         except Exception as e:
             logger.error(f"Upsert save failed for {ticker}: {e}", exc_info=True)
@@ -2377,7 +988,8 @@ def process_ticker_safe(ticker: str, db_url: str, incremental: bool):
         return True
     except KeyboardInterrupt:
         return False
-    except Exception:
+    except Exception as e:
+        logger.error(f"process_ticker_safe failed for {ticker}: {e}", exc_info=True)
         return False
 
 
@@ -2448,8 +1060,9 @@ def run_multiprocess_pipeline(db_url, incremental=True):
                 except concurrent.futures.TimeoutError:
                     ticker = future_to_ticker[future]
                     save_failures.append(ticker)
-                except Exception:
+                except Exception as e:
                     ticker = future_to_ticker[future]
+                    logger.error(f"Parallel compute failed for {ticker}: {e}")
                     save_failures.append(ticker)
                     
     except KeyboardInterrupt:
@@ -2486,8 +1099,8 @@ def run_multiprocess_pipeline(db_url, incremental=True):
                 if process_ticker_safe(ticker, db_url, incremental):
                     success_count += 1
                     retry_count += 1
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"Retry failed for {ticker}: {e}")
 
     logger.info(f"\n{'='*60}")
     logger.info(f"Pipeline Complete")

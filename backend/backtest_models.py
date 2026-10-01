@@ -113,6 +113,7 @@ class BacktestConfig:
     regime_vol_period: int = 20        # Rolling window for volatility regime
     regime_vol_high_threshold: float = 0.02  # Daily vol above this = high vol
     regime_vol_low_threshold: float = 0.008  # Daily vol below this = low vol
+    circuit_breaker_drawdown_pct: float = 5.0  # Max drawdown before stop trading
 
     # --- Walk-Forward ---
     walk_forward_splits: int = 5

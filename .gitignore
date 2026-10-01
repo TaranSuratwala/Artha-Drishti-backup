@@ -52,3 +52,6 @@ node_modules/
 # Databases
 *.sqlite3
 *.db
+
+# Generated model cache (too large for GitHub)
+backend/unified_models/engineered_features_cache.pkl

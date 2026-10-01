@@ -19,12 +19,43 @@ Integrated from: BTP SEM-5 RiskAnalytics into Project sem-6 architecture
 import pandas as pd
 import numpy as np
 from scipy import stats
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Tuple
 import logging
+
+logger = logging.getLogger(__name__)
+
+class RegimeAccuracyMonitor:
+    """
+    Monitors rolling 30-day prediction accuracy segmented by 3 market regimes:
+    BULL (Nifty up), BEAR (Nifty down), RANGE (range-bound).
+    Automatically flags suspension if accuracy drops below 50% for 2 consecutive windows.
+    """
+    def __init__(self, window_size: int = 30, min_accuracy: float = 0.50):
+        self.window_size = window_size
+        self.min_accuracy = min_accuracy
+        # Format: { 'BULL': [[window1_acc], [window2_acc]], ... }
+        self.history: Dict[str, List[float]] = {'BULL': [], 'BEAR': [], 'RANGE': []}
+
+    def add_window_result(self, regime: str, hits: int, total: int):
+        if regime not in self.history:
+            self.history[regime] = []
+        acc = hits / total if total > 0 else 0.0
+        self.history[regime].append(acc)
+
+    def should_suspend(self, regime: str) -> Tuple[bool, str]:
+        """Check if signals should be suspended for a specific regime."""
+        hist = self.history.get(regime, [])
+        if len(hist) < 2:
+            return False, "Insufficient history"
+        
+        # Check last two consecutive windows
+        if hist[-1] < self.min_accuracy and hist[-2] < self.min_accuracy:
+            return True, f"Accuracy below {self.min_accuracy*100}% for 2 consecutive windows in {regime} regime"
+        return False, "Accuracy stable"
+
 import warnings
 
 warnings.filterwarnings("ignore")
-logger = logging.getLogger(__name__)
 
 
 def _strip_tz(series_or_df):
@@ -135,24 +166,27 @@ class RiskAnalytics:
         ann_vol = daily_vol * np.sqrt(252)
 
         vol_20d = returns.rolling(20).std().iloc[-1] * np.sqrt(252)
+        vol_20d = float(vol_20d) if pd.notnull(vol_20d) else float(ann_vol)
+
         vol_60d = (returns.rolling(60).std().iloc[-1] * np.sqrt(252)
                    if len(returns) > 60 else ann_vol)
+        vol_60d = float(vol_60d) if pd.notnull(vol_60d) else float(ann_vol)
 
         downside_returns = returns[returns < 0]
         downside_vol = downside_returns.std() * np.sqrt(252) if len(downside_returns) > 0 else 0
         upside_returns = returns[returns > 0]
         upside_vol = upside_returns.std() * np.sqrt(252) if len(upside_returns) > 0 else 0
 
+        upside_downside_ratio = upside_vol / downside_vol if downside_vol > 0 else None
+
         return {
-            "daily_volatility": round(daily_vol * 100, 2),
-            "annualized_volatility": round(ann_vol * 100, 2),
-            "volatility_20d": round(float(vol_20d) * 100, 2),
-            "volatility_60d": round(float(vol_60d) * 100, 2),
-            "downside_volatility": round(downside_vol * 100, 2),
-            "upside_volatility": round(upside_vol * 100, 2),
-            "upside_downside_ratio": round(
-                upside_vol / downside_vol if downside_vol > 0 else float("inf"), 2
-            ),
+            "daily_volatility": round(daily_vol * 100, 2) if pd.notnull(daily_vol) else 0,
+            "annualized_volatility": round(ann_vol * 100, 2) if pd.notnull(ann_vol) else 0,
+            "volatility_20d": round(vol_20d * 100, 2),
+            "volatility_60d": round(vol_60d * 100, 2),
+            "downside_volatility": round(downside_vol * 100, 2) if pd.notnull(downside_vol) else 0,
+            "upside_volatility": round(upside_vol * 100, 2) if pd.notnull(upside_vol) else 0,
+            "upside_downside_ratio": round(upside_downside_ratio, 2) if upside_downside_ratio is not None else None,
         }
 
     # ── Risk-Adjusted Metrics ──

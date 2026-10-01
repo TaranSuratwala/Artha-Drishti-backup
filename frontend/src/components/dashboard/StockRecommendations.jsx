@@ -54,8 +54,9 @@ export const StockRecommendations = ({ onTickerClick }) => {
 
     const formatTicker = (ticker) => String(ticker || '').trim().replace(/^\^+/, '').toUpperCase();
 
+    const hasInitialLoaded = React.useRef(false);
     const load = useCallback(async () => {
-        if (!recs.length) setLoading(true);
+        if (!hasInitialLoaded.current) setLoading(true);
         setRefreshing(true);
         setError(null);
         try {
@@ -69,19 +70,20 @@ export const StockRecommendations = ({ onTickerClick }) => {
                 timeframe: data?.timeframe || timeframe,
             });
             setLastUpdated(new Date());
+            hasInitialLoaded.current = true;
         } catch (e) {
             setError(formatRecommendationError(e));
         } finally {
             setLoading(false);
             setRefreshing(false);
         }
-    }, [recs.length, timeframe]);
+    }, [timeframe]);
 
     useEffect(() => { load(); }, [load]);
 
-    // Auto-refresh every 20s
+    // Auto-refresh every 300s
     useEffect(() => {
-        const interval = setInterval(load, 20_000);
+        const interval = setInterval(load, 300_000);
         return () => clearInterval(interval);
     }, [load]);
 
@@ -146,6 +148,8 @@ export const StockRecommendations = ({ onTickerClick }) => {
                 return { icon: TrendingUp, color: 'text-blue-400', label: 'Trend Following' };
             case 'breakout':
                 return { icon: Zap, color: 'text-yellow-400', label: 'Breakout' };
+            case 'ai_bullish_setup':
+                return { icon: Brain, color: 'text-purple-400', label: 'AI Bullish Pre-filter' };
             default:
                 return { icon: BarChart2, color: 'text-gray-300', label: toTitleCase(strategy) };
         }
@@ -313,6 +317,12 @@ export const StockRecommendations = ({ onTickerClick }) => {
                                                 {r.live && (
                                                     <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-400 border border-green-500/20 font-medium recommendation-live-chip">
                                                         LIVE
+                                                    </span>
+                                                )}
+                                                {r.signal && r.signal !== 'NEUTRAL' && (
+                                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold flex items-center gap-1 border ${r.signal.includes('BUY') ? 'bg-green-500/20 text-green-400 border-green-500/40' : 'bg-red-500/20 text-red-400 border-red-500/40'}`}>
+                                                        <Brain size={10} />
+                                                        {r.signal.replace('_', ' ')} {r.direction_prob ? `(${Math.round(r.direction_prob)}%)` : ''}
                                                     </span>
                                                 )}
                                             </div>

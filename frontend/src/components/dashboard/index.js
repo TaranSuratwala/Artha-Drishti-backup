@@ -3,3 +3,5 @@ export { TopMovers } from './TopMovers';
 export { PriceTargets } from './PriceTargets';
 export { PriceTargetsDashboard } from './PriceTargetsDashboard';
 export { StockRecommendations } from './StockRecommendations';
+export { BeginnerRiskSummary } from './BeginnerRiskSummary';
+export { DashboardContainer } from './DashboardContainer';

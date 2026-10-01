@@ -1,7 +1,11 @@
 """Add missing columns to users table for Google OAuth support."""
 from sqlalchemy import create_engine, text
 
-DB_URL = "postgresql://postgres:Taran%4017@localhost:5432/StockDB"
+import os
+
+DB_URL = os.getenv("DATABASE_URL", "")
+if not DB_URL:
+    raise RuntimeError("DATABASE_URL environment variable not set")
 engine = create_engine(DB_URL)
 
 with engine.begin() as conn:

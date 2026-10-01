@@ -117,22 +117,35 @@ class ExportManager:
     @staticmethod
     def to_json(data: Any) -> str:
         """Export any data structure to JSON string."""
+        import math
+        def clean_data(obj):
+            if isinstance(obj, dict):
+                return {k: clean_data(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [clean_data(x) for x in obj]
+            elif isinstance(obj, float):
+                if math.isnan(obj) or math.isinf(obj):
+                    return None
+            return obj
+
         def default_serializer(obj):
             if isinstance(obj, (np.integer,)):
                 return int(obj)
             if isinstance(obj, (np.floating,)):
-                return float(obj)
+                val = float(obj)
+                return val if not (math.isnan(val) or math.isinf(val)) else None
             if isinstance(obj, (np.ndarray,)):
                 return obj.tolist()
             if isinstance(obj, pd.DataFrame):
-                return obj.to_dict(orient="records")
+                return obj.replace([np.inf, -np.inf], np.nan).where(pd.notnull(obj), None).to_dict(orient="records")
             if isinstance(obj, pd.Series):
-                return obj.to_dict()
+                return obj.replace([np.inf, -np.inf], np.nan).where(pd.notnull(obj), None).to_dict()
             if isinstance(obj, (datetime,)):
                 return obj.isoformat()
             return str(obj)
 
-        return json.dumps(data, default=default_serializer, indent=2)
+        cleaned_data = clean_data(data)
+        return json.dumps(cleaned_data, default=default_serializer, indent=2)
 
     @staticmethod
     def generate_stock_report_html(symbol: str,

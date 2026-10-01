@@ -6,7 +6,7 @@ import { fetchTopMovers } from '../../services/api';
  * TopMovers Component - Displays top 4 gainers and top 4 losers
  * with live data refresh capability
  */
-const TopMovers = ({ onTickerClick }) => {
+const TopMovers = React.memo(({ onTickerClick }) => {
     const [gainers, setGainers] = useState([]);
     const [losers, setLosers] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -15,15 +15,17 @@ const TopMovers = ({ onTickerClick }) => {
     const [lastUpdated, setLastUpdated] = useState(null);
     const [autoRefresh, setAutoRefresh] = useState(true);
 
+    const hasInitialLoaded = React.useRef(false);
     const loadMovers = useCallback(async () => {
         try {
-            if (!gainers.length && !losers.length) setLoading(true);
+            if (!hasInitialLoaded.current) setLoading(true);
             setRefreshing(true);
             setError(null);
             const data = await fetchTopMovers();
             setGainers(data.gainers || []);
             setLosers(data.losers || []);
             setLastUpdated(new Date());
+            hasInitialLoaded.current = true;
         } catch (err) {
             console.error('Failed to fetch market movers:', err);
             setError('Failed to load market data');
@@ -31,19 +33,19 @@ const TopMovers = ({ onTickerClick }) => {
             setLoading(false);
             setRefreshing(false);
         }
-    }, [gainers.length, losers.length]);
+    }, []);
 
     useEffect(() => {
         loadMovers();
     }, [loadMovers]);
 
-    // Auto-refresh every 15 seconds
+    // Auto-refresh every 180 seconds
     useEffect(() => {
         if (!autoRefresh) return;
 
         const interval = setInterval(() => {
             loadMovers();
-        }, 15000);
+        }, 180000);
 
         return () => clearInterval(interval);
     }, [autoRefresh, loadMovers]);
@@ -236,7 +238,7 @@ const TopMovers = ({ onTickerClick }) => {
             </div>
         </div>
     );
-};
+});
 
 export { TopMovers };
 export default TopMovers;

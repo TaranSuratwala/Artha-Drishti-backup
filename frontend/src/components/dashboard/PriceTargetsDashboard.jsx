@@ -40,7 +40,7 @@ export const PriceTargetsDashboard = ({ tickers = [] }) => {
 
     useEffect(() => {
         if (!autoRefresh || tickers.length === 0 || selectedTicker) return;
-        const interval = setInterval(loadBatchTargets, 30_000);
+        const interval = setInterval(loadBatchTargets, 300_000);
         return () => clearInterval(interval);
     }, [autoRefresh, tickers.length, selectedTicker, loadBatchTargets]);
 

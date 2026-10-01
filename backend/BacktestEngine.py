@@ -407,7 +407,7 @@ class BacktestEngine:
                     self._close_position(
                         position, exit_price, exit_reason, row, atr, avg_vol
                     )
-                    capital += position.exit_price * position.quantity - position.transaction_costs - position.slippage_cost
+                    capital += position.exit_price * position.quantity
                     # Only deduct exit costs from capital
                     exit_txn = self.calculate_transaction_cost(exit_price, position.quantity)
                     exit_slip = self.calculate_slippage(exit_price, position.quantity, atr, avg_vol, False)
@@ -434,7 +434,14 @@ class BacktestEngine:
                     position = None
 
             # === CHECK ENTRY (if no position) ===
-            if position is None and signal == 1:
+            _circuit_breaker_active = False
+            if len(equity_curve) > 0:
+                recent_equities = [eq['equity'] for eq in equity_curve[-20:]]
+                peak_equity = max(recent_equities)
+                if peak_equity > 0 and capital < peak_equity * (1 - cfg.circuit_breaker_drawdown_pct / 100):
+                    _circuit_breaker_active = True
+
+            if position is None and signal == 1 and not _circuit_breaker_active:
                 fill_price = self.get_fill_price(row, 1) or row['close']
 
                 # Calculate stops
@@ -459,22 +466,21 @@ class BacktestEngine:
                 entry_slip = self.calculate_slippage(
                     fill_price, quantity, atr, avg_vol, True
                 )
-                adjusted_entry = fill_price * (1 + cfg.base_slippage_pct / 100)
 
-                total_cost = adjusted_entry * quantity + entry_txn + entry_slip
+                total_cost = fill_price * quantity + entry_txn + entry_slip
                 if total_cost > capital:
                     # Reduce quantity to fit
-                    quantity = int((capital - entry_txn - entry_slip) / adjusted_entry)
+                    quantity = int((capital - entry_txn - entry_slip) / fill_price)
                     if quantity <= 0:
                         equity_curve.append(self._equity_point(row, capital, position))
                         continue
-                    total_cost = adjusted_entry * quantity + entry_txn + entry_slip
+                    total_cost = fill_price * quantity + entry_txn + entry_slip
 
                 # Create position
                 position = Trade(
                     ticker=strategy_name,
                     entry_date=row['date'] if hasattr(row['date'], 'isoformat') else pd.to_datetime(row['date']),
-                    entry_price=adjusted_entry,
+                    entry_price=fill_price,
                     position_type=PositionType.LONG,
                     quantity=quantity,
                     transaction_costs=entry_txn,
@@ -482,15 +488,15 @@ class BacktestEngine:
                     stop_loss_price=stop_loss,
                     take_profit_price=take_profit,
                     trailing_stop_price=(
-                        adjusted_entry * (1 - cfg.trailing_stop_pct / 100)
+                        fill_price * (1 - cfg.trailing_stop_pct / 100)
                         if cfg.use_trailing_stop else 0
                     ),
-                    highest_price_since_entry=adjusted_entry,
+                    highest_price_since_entry=fill_price,
                     market_regime=row.get('regime', MarketRegime.UNKNOWN),
                 )
                 entry_bar_idx = i
                 capital -= total_cost
-                current_portfolio_risk += abs(adjusted_entry - stop_loss) * quantity
+                current_portfolio_risk += abs(fill_price - stop_loss) * quantity
 
             # Track equity
             equity_curve.append(self._equity_point(row, capital, position))

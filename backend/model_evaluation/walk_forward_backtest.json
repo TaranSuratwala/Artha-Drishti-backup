@@ -1,0 +1,14 @@
+{
+  "total_predictions": 13920,
+  "tickers_tested": 5,
+  "date_range": {
+    "start": "2022-02-21T00:00:00",
+    "end": "2026-05-15T00:00:00"
+  },
+  "price_statistics": {
+    "avg_actual_change_pct": 0.028044128148032657,
+    "std_actual_change_pct": 3.068384654689839,
+    "max_gain": 15.633723643658982,
+    "max_loss": -14.673007297802076
+  }
+}

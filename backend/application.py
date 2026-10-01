@@ -13,6 +13,12 @@ import sys
 import time
 import uuid
 from threading import Lock
+import warnings
+
+# Suppress Eventlet deprecation warnings from curl_cffi or other libraries
+warnings.filterwarnings("ignore", category=Warning, module=".*eventlet.*")
+warnings.filterwarnings("ignore", category=Warning, module=".*curl_cffi.*")
+warnings.filterwarnings("ignore", message=".*Eventlet is deprecated.*")
 import numpy as np
 import pandas as pd
 from functools import wraps
@@ -30,9 +36,13 @@ from flask.json.provider import DefaultJSONProvider
 
 
 class _NumpySafeJSONProvider(DefaultJSONProvider):
-    """Flask JSON provider that gracefully handles numpy and pandas types."""
+    """Flask JSON provider that gracefully handles numpy and pandas types, and sanitize NaNs."""
 
     def default(self, obj):
+        import math
+        # Standard floats (prevent JSON NaN/Infinity crashes)
+        if isinstance(obj, float):
+            return obj if not (math.isnan(obj) or math.isinf(obj)) else None
         # numpy scalar types
         if isinstance(obj, np.bool_):
             return bool(obj)
@@ -146,7 +156,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Database URL from environment or default
-DB_URL = os.getenv("DATABASE_URL", "postgresql://postgres:Taran%4017@localhost:5432/StockDB")
+DB_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/StockDB")
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -169,6 +179,21 @@ def _env_int(name: str, default: int) -> int:
 
 
 APP_ENV = os.getenv("APP_ENV", os.getenv("FLASK_ENV", "production")).strip().lower()
+
+import re
+
+# Ticker validation pattern: 1-20 alphanumeric chars, optionally with hyphens/underscores/dots
+_VALID_TICKER_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$')
+
+def _validate_ticker(ticker: str) -> str:
+    """Validate and sanitize ticker symbol. Returns uppercase ticker or raises ValueError."""
+    if not ticker or not isinstance(ticker, str):
+        raise ValueError("Ticker symbol is required")
+    ticker = ticker.strip().upper()
+    if not _VALID_TICKER_PATTERN.match(ticker):
+        raise ValueError(f"Invalid ticker format: {ticker}")
+    return ticker
+
 APP_DEBUG = _env_flag("APP_DEBUG", default=APP_ENV == "development")
 if "FLASK_DEBUG" in os.environ:
     APP_DEBUG = _env_flag("FLASK_DEBUG", default=APP_DEBUG)
@@ -178,12 +203,17 @@ APP_THREADED = _env_flag("APP_THREADED", default=True)
 APP_USE_RELOADER = _env_flag("APP_USE_RELOADER", default=APP_DEBUG)
 APP_STARTED_AT = time.time()
 
+# CORS configuration - allow configured origins
+allowed_origins = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
+
+from flask_socketio import SocketIO
 app = Flask(__name__)
 app.json_provider_class = _NumpySafeJSONProvider  # Handle numpy/pandas types in all JSON responses
 app.json = _NumpySafeJSONProvider(app)            # Apply to current app instance
+socketio = SocketIO(app, cors_allowed_origins=allowed_origins)
 
 # JWT Configuration
-_DEFAULT_JWT_SECRET = "genai-stock-intel-secret-key-2024"
+_DEFAULT_JWT_SECRET = "dev-secret-key-do-not-use-in-prod"
 _jwt_secret = os.getenv("JWT_SECRET_KEY", _DEFAULT_JWT_SECRET)
 STRICT_SECURITY = _env_flag("STRICT_SECURITY", default=False)
 if APP_ENV in {"production", "staging"} and _jwt_secret == _DEFAULT_JWT_SECRET:
@@ -196,18 +226,9 @@ app.config["JWT_SECRET_KEY"] = _jwt_secret
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = datetime.timedelta(days=1)
 jwt = JWTManager(app)
 
-# CORS configuration - allow configured origins
-cors_origins = [
-    origin.strip()
-    for origin in os.getenv(
-        "CORS_ORIGINS",
-        "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
-    ).split(",")
-    if origin.strip()
-]
 CORS(app, resources={
     r"/api/*": {
-        "origins": cors_origins,
+        "origins": allowed_origins,
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization", "X-Request-Id"],
         "expose_headers": ["X-Request-Id", "X-Response-Time-Ms"]
@@ -406,6 +427,17 @@ def _get_cached(key):
 def _set_cached(key, data, ttl=SCREEN_CACHE_TTL):
     _result_cache[key] = (data, time.time() + ttl)
 
+def get_cached_latest_data(pipeline, limit=None):
+    if limit is not None:
+        return pipeline.get_latest_data(limit=limit)
+    cache_key = "latest_data_full"
+    hit = _get_cached(cache_key)
+    if hit is not None:
+        return hit
+    data = pipeline.get_latest_data(limit=None)
+    _set_cached(cache_key, data, 60)
+    return data
+
 def screen_cache(ttl=SCREEN_CACHE_TTL):
     """Decorator: caches screener JSON responses for *ttl* seconds."""
     def decorator(f):
@@ -468,7 +500,7 @@ def run_feature_engineering():
             import pandas as pd
 
             # 1. Get unique tickers from latest data (single query)
-            all_data = pipeline.get_latest_data(limit=None)
+            all_data = get_cached_latest_data(pipeline, limit=None)
             if not all_data:
                 logger.warning("   ⚠️  No data found for feature engineering")
                 return
@@ -546,7 +578,7 @@ def run_sentiment_precache():
         engine = get_sentiment_engine()
 
         # Get top tickers by volume (most likely to be viewed by users)
-        all_data = pipeline.get_latest_data(limit=None)
+        all_data = get_cached_latest_data(pipeline, limit=None)
         if not all_data:
             logger.warning("   ⚠️  No data to determine top tickers")
             return
@@ -606,40 +638,60 @@ try:
     # Initialize Exchange Manager
     exchange_manager = get_exchange_manager(default_exchange='NSE')
     
-    # Initialize Data Scheduler.
-    # Auto-training is controlled by SCHEDULER_AUTO_TRAIN (default: false).
-    data_scheduler = get_scheduler(
-        data_pipeline=pipeline,
-        feature_engineer_func=run_feature_engineering,
-        model_train_func=predictor.train,
-        sentiment_func=run_sentiment_precache,  # Pre-cache sentiment analysis
-    )
-    # Guard against duplicate schedulers in Flask reloader and multi-worker Gunicorn.
-    _werkzeug_main = os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
-    _is_gunicorn = 'gunicorn' in os.environ.get('SERVER_SOFTWARE', '').lower()
-    _allow_scheduler_in_gunicorn = _env_flag('SCHEDULER_IN_WEB_WORKER', default=False)
-
-    if _is_gunicorn and not _allow_scheduler_in_gunicorn:
-        should_start_scheduler = False
-        logger.info("⏸️  Scheduler disabled in Gunicorn web workers (set SCHEDULER_IN_WEB_WORKER=true for single-worker setups)")
-    elif APP_DEBUG and APP_USE_RELOADER and not _werkzeug_main:
-        should_start_scheduler = False
-        logger.info("⏸️  Scheduler deferred — waiting for Flask reloader to start actual server process")
-    else:
-        should_start_scheduler = True
-
-    if should_start_scheduler:
-        data_scheduler.start()
+    # Initialize Backtest and Strategy Engines for Agent
+    from BacktestEngine import get_backtest_engine
+    from AdvancedStrategyEngine import get_strategy_engine
+    backtest_engine = get_backtest_engine(data_pipeline=pipeline)
+    strategy_engine = get_strategy_engine()
     
+    # Initialize Broker and Order Manager
+    try:
+        from PaperBroker import PaperBroker
+        from OrderManager import OrderManager
+        paper_capital = float(getattr(app.config, 'PAPER_TRADING_CAPITAL', 1000000.0))
+        broker = PaperBroker(initial_capital=paper_capital, data_pipeline=pipeline)
+        broker.connect({})
+        order_manager = OrderManager(broker=broker, config=app.config)
+        logger.info(f"✅ Paper Broker and Order Manager initialized (Capital: ₹{paper_capital})")
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to initialize broker/order manager: {e}")
+        order_manager = None
+
+    # Initialize LangGraph Agent
+    try:
+        from AgentEngine import ArthaAgent
+        agent = ArthaAgent(
+            screener=screener,
+            predictor=predictor,
+            pipeline=pipeline,
+            backtest_engine=backtest_engine,
+            strategy_engine=strategy_engine,
+            portfolio_manager=portfolio_manager,
+            order_manager=order_manager
+        )
+        logger.info("✅ LangGraph Agent initialized successfully")
+    except Exception as agent_err:
+        logger.warning(f"⚠️ LangGraph Agent initialization failed: {agent_err}")
+        agent = None
+
+    # Removed APScheduler logic in favor of Celery (see celery_app.py and tasks.py)
     logger.info("✅ All components initialized successfully")
-    logger.info("⏰ Scheduler Status:")
-    scheduler_status = data_scheduler.get_status()
-    logger.info(f"   - Enabled: {scheduler_status.get('enabled')}")
-    logger.info(f"   - Running: {scheduler_status.get('running')}")
-    logger.info(f"   - Schedule: Every weekday at {scheduler_status.get('schedule')}")
+    logger.info("⏰ Background tasks are now managed by Celery. Make sure celery worker and beat are running.")
 except Exception as e:
     logger.error(f"❌ Failed to initialize components: {e}")
     raise
+
+# ==================== MODEL MONITORING (Feature #2) ====================
+# Walk-forward evaluation reports, model health and feature drift checks.
+try:
+    from model_monitoring_api import create_model_monitoring_blueprint
+
+    app.register_blueprint(create_model_monitoring_blueprint(
+        get_predictor=lambda: predictor,
+    ))
+    logger.info("✅ Model monitoring endpoints registered (/api/model/*)")
+except Exception as _monitor_err:
+    logger.warning(f"⚠️ Model monitoring unavailable: {_monitor_err}")
 
 def clean_row(row):
     """Convert database row to JSON-serializable format"""
@@ -961,12 +1013,12 @@ def get_batch_quotes():
 def fetch_stocks():
     """Fetch all stocks latest data"""
     try:
-        raw_data = pipeline.get_latest_data(limit=None)
+        raw_data = get_cached_latest_data(pipeline, limit=None)
         clean_data = [clean_row(row) for row in raw_data]
         return jsonify(clean_data)
     except Exception as e:
         logger.error(f"Error fetching stocks: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/history/<ticker>', methods=['GET'])
 def fetch_history(ticker):
@@ -1000,7 +1052,7 @@ def fetch_history(ticker):
         return jsonify(clean_data)
     except Exception as e:
         logger.error(f"Error fetching history for {ticker}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 # ==================== MARKET MOVERS ENDPOINTS ====================
 
@@ -1022,7 +1074,7 @@ def get_market_movers():
     try:
         import yfinance as yf
 
-        raw_data = pipeline.get_latest_data(limit=None)
+        raw_data = get_cached_latest_data(pipeline, limit=None)
         clean_data = [clean_row(row) for row in raw_data]
 
         # Build candidate list from DB (fast)
@@ -1104,7 +1156,7 @@ def get_market_movers():
 
     except Exception as e:
         logger.error(f"Error fetching market movers: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 # Server-side cache for market overview (avoid hammering yfinance)
@@ -1123,7 +1175,7 @@ def get_market_overview():
     try:
         import yfinance as yf
 
-        # ── 1. Live index quotes ──
+        # ── 1. Live index & sector quotes ──
         # Use working Yahoo Finance symbols for Indian indices.
         # Index tickers use ^ prefix and must NOT have .NS/.BO appended.
         indices = {
@@ -1132,15 +1184,31 @@ def get_market_overview():
             '^NSEBANK':     {'name': 'BANK NIFTY',      'short': 'BANKNIFTY'},
             'JUNIORBEES.NS': {'name': 'NIFTY NEXT 50 (ETF Proxy)', 'short': 'NXTFIFTY'},
         }
+        # Sectoral performance via representative large-cap stocks
+        sector_proxies = {
+            'TCS.NS':       'IT',
+            'SUNPHARMA.NS': 'Pharma',
+            'HDFCBANK.NS':  'Financial',
+            'MARUTI.NS':    'Auto',
+            'TATASTEEL.NS': 'Metal',
+            'RELIANCE.NS':  'Energy',
+            'DLF.NS':       'Realty',
+            'HINDUNILVR.NS':'FMCG',
+        }
 
         index_data = []
+        sectors = []
         try:
-            yf_tickers = ' '.join(indices.keys())
+            all_tickers = list(indices.keys()) + list(sector_proxies.keys())
+            yf_tickers = ' '.join(all_tickers)
             data = yf.download(yf_tickers, period='5d', progress=False, timeout=6)
+            
             if not data.empty:
                 # Deep-copy to fix numpy read-only issue
                 data = data.copy(deep=True)
                 is_multi = isinstance(data.columns, pd.MultiIndex)
+                
+                # Process Indices
                 for yf_sym, meta in indices.items():
                     try:
                         if is_multi:
@@ -1162,11 +1230,27 @@ def get_market_overview():
                             })
                     except Exception:
                         pass
+                
+                # Process Sectors
+                for yf_s, label in sector_proxies.items():
+                    try:
+                        if is_multi:
+                            cs = data['Close'][yf_s] if yf_s in data['Close'].columns else None
+                        else:
+                            cs = data['Close']
+                        if cs is not None and not cs.dropna().empty:
+                            vals = cs.dropna()
+                            cur = float(vals.iloc[-1])
+                            prv = float(vals.iloc[-2]) if len(vals) >= 2 else cur
+                            ch_pct = round(((cur - prv) / prv) * 100, 2) if prv > 0 else 0
+                            sectors.append({'name': label, 'change_pct': ch_pct})
+                    except Exception:
+                        pass
         except Exception as e:
-            logger.warning(f"Index fetch failed: {e}")
+            logger.warning(f"Index/Sector fetch failed: {e}")
 
         # ── 2. Market breadth from DB (fast) ──
-        raw = pipeline.get_latest_data(limit=None)
+        raw = get_cached_latest_data(pipeline, limit=None)
         cleaned = [clean_row(r) for r in raw]
         advancers = 0
         decliners = 0
@@ -1189,44 +1273,6 @@ def get_market_overview():
 
         total = advancers + decliners + unchanged
         breadth_pct = round((advancers / total) * 100, 1) if total > 0 else 50
-
-        # ── 3. Sectoral performance via representative large-cap stocks ──
-        # Many sectoral index tickers (^CNXIT, ^CNXPHARMA, etc.) are
-        # no longer available on Yahoo Finance.  Instead, compute a
-        # proxy from the largest constituent of each sector.
-        sector_proxies = {
-            'TCS.NS':       'IT',
-            'SUNPHARMA.NS': 'Pharma',
-            'HDFCBANK.NS':  'Financial',
-            'MARUTI.NS':    'Auto',
-            'TATASTEEL.NS': 'Metal',
-            'RELIANCE.NS':  'Energy',
-            'DLF.NS':       'Realty',
-            'HINDUNILVR.NS':'FMCG',
-        }
-        sectors = []
-        try:
-            sec_tickers = ' '.join(sector_proxies.keys())
-            sec_data = yf.download(sec_tickers, period='5d', progress=False, timeout=6)
-            if not sec_data.empty:
-                sec_data = sec_data.copy(deep=True)
-                is_multi = isinstance(sec_data.columns, pd.MultiIndex)
-                for yf_s, label in sector_proxies.items():
-                    try:
-                        if is_multi:
-                            cs = sec_data['Close'][yf_s] if yf_s in sec_data['Close'].columns else None
-                        else:
-                            cs = sec_data['Close']
-                        if cs is not None and not cs.dropna().empty:
-                            vals = cs.dropna()
-                            cur = float(vals.iloc[-1])
-                            prv = float(vals.iloc[-2]) if len(vals) >= 2 else cur
-                            ch_pct = round(((cur - prv) / prv) * 100, 2) if prv > 0 else 0
-                            sectors.append({'name': label, 'change_pct': ch_pct})
-                    except Exception:
-                        pass
-        except Exception as e:
-            logger.debug(f"Sector fetch failed: {e}")
 
         sectors.sort(key=lambda x: x['change_pct'], reverse=True)
 
@@ -1254,7 +1300,7 @@ def get_market_overview():
 
     except Exception as e:
         logger.error(f"Market overview error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/stocks/search', methods=['GET'])
 @rate_limit
@@ -1275,7 +1321,7 @@ def search_stocks():
                 "count": 0
             })
         
-        raw_data = pipeline.get_latest_data(limit=None)
+        raw_data = get_cached_latest_data(pipeline, limit=None)
         clean_data = [clean_row(row) for row in raw_data]
         
         # Filter stocks matching the query
@@ -1312,7 +1358,7 @@ def search_stocks():
         
     except Exception as e:
         logger.error(f"Error searching stocks: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 # ==================== SCREENING ENDPOINTS ====================
@@ -1340,11 +1386,16 @@ def _run_screen(strategy_name, params=None):
         except (TypeError, ValueError):
             max_results = 200
 
+        socketio.emit('task_progress', {'task': 'screen', 'strategy': strategy_name, 'status': 'started'})
+        
         raw = screener._interactive.run_screening(
             strategy_name,
             max_results=max_results,
             overrides=overrides,
         )
+        
+        socketio.emit('task_progress', {'task': 'screen', 'strategy': strategy_name, 'status': 'completed'})
+        
         if raw.get('status') != 'success':
             return jsonify({"error": raw.get('message', 'Screening failed'), "strategy": strategy_name, "results": [], "count": 0}), 500
 
@@ -1364,10 +1415,12 @@ def _run_screen(strategy_name, params=None):
 
 
 @app.route('/api/screen/piotroski', methods=['POST'])
+@jwt_required()
 def screen_piotroski():
     return _run_screen('piotroski', request.get_json(silent=True))
 
 @app.route('/api/screen/macd_triple_alignment', methods=['GET', 'POST'])
+@jwt_required()
 def run_macd_triple_alignment():
     """Execute the 3 MACD Alignment strategy via the optimized engine"""
     try:
@@ -1388,22 +1441,27 @@ def run_macd_triple_alignment():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/screen/momentum', methods=['POST'])
+@jwt_required()
 def screen_momentum():
     return _run_screen('momentum', request.get_json(silent=True))
 
 @app.route('/api/screen/swing', methods=['GET'])
+@jwt_required()
 def screen_swing():
     return _run_screen('swing')
 
 @app.route('/api/screen/breakout', methods=['POST'])
+@jwt_required()
 def screen_breakout():
     return _run_screen('breakout', request.get_json(silent=True))
 
 @app.route('/api/screen/value', methods=['GET'])
+@jwt_required()
 def screen_value():
     return _run_screen('value')
 
 @app.route('/api/screen/custom', methods=['POST'])
+@jwt_required()
 def screen_custom():
     """Custom screening with user-defined conditions"""
     try:
@@ -1425,29 +1483,35 @@ def screen_custom():
         })
     except Exception as e:
         logger.error(f"Custom screening error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/screen/garp', methods=['POST'])
+@jwt_required()
 def screen_garp():
     return _run_screen('garp', request.get_json(silent=True))
 
 @app.route('/api/screen/mean_reversion', methods=['POST'])
+@jwt_required()
 def screen_mean_reversion():
     return _run_screen('mean_reversion', request.get_json(silent=True))
 
 @app.route('/api/screen/quality_dividend', methods=['POST'])
+@jwt_required()
 def screen_quality_dividend():
     return _run_screen('quality_dividend', request.get_json(silent=True))
 
 @app.route('/api/screen/trend_following', methods=['POST'])
+@jwt_required()
 def screen_trend_following():
     return _run_screen('trend_following', request.get_json(silent=True))
 
 @app.route('/api/screen/contrarian', methods=['POST'])
+@jwt_required()
 def screen_contrarian():
     return _run_screen('contrarian', request.get_json(silent=True))
 
 @app.route('/api/screen/quality_growth', methods=['POST'])
+@jwt_required()
 def screen_quality_growth():
     return _run_screen('quality_growth', request.get_json(silent=True))
 
@@ -1565,9 +1629,9 @@ def get_recommendations():
     timeframe = str(timeframe or 'weekly').strip().lower()
 
     strategy_map = {
-        'daily': ['momentum', 'swing_trading', 'contrarian'],
-        'weekly': ['momentum', 'trend_following', 'breakout'],
-        'monthly': ['trend_following', 'mean_reversion', 'breakout'],
+        'daily': ['ai_bullish_setup', 'momentum', 'swing_trading', 'contrarian'],
+        'weekly': ['ai_bullish_setup', 'momentum', 'trend_following', 'breakout'],
+        'monthly': ['ai_bullish_setup', 'trend_following', 'mean_reversion', 'breakout'],
     }
     if timeframe not in strategy_map:
         timeframe = 'weekly'
@@ -1783,6 +1847,53 @@ def get_recommendations():
             if used_db_fallback:
                 logger.warning("Using DB fallback recommendations (strategy screens returned no candidates in time)")
 
+        # ── Enrich with AI ML Predictor ──
+        # Predict on the top candidates to boost true high-conviction bullish setups.
+        def _run_prediction(r):
+            try:
+                pred = predictor.predict(r['ticker'])
+                if pred and 'recommendation' in pred and 'error' not in pred:
+                    rec = pred['recommendation']
+                    r['signal'] = rec.get('signal', 'NEUTRAL')
+                    r['direction_prob'] = rec.get('direction_probability', 50.0)
+                    if r['signal'] in ['BUY', 'STRONG_BUY']:
+                        bonus = (r['direction_prob'] - 50) * 0.4
+                        r['confidence'] = min(99.0, r.get('confidence', 50) + max(0, bonus))
+                    elif r['signal'] in ['SELL', 'STRONG_SELL']:
+                        r['confidence'] = max(10.0, r.get('confidence', 50) - 20.0)
+                else:
+                    r['signal'] = 'NEUTRAL'
+                    r['direction_prob'] = 50.0
+            except Exception as e:
+                logger.warning(f"ML Predictor failed for {r['ticker']}: {e}")
+                r['signal'] = 'NEUTRAL'
+                r['direction_prob'] = 50.0
+            return r
+
+        if ranked:
+            ml_pool = ThreadPoolExecutor(max_workers=min(10, len(ranked)))
+            ai_enriched = []
+            try:
+                futures = [ml_pool.submit(_run_prediction, r) for r in ranked]
+                done, _ = wait(futures, timeout=6.0)
+                for f in done:
+                    try:
+                        ai_enriched.append(f.result())
+                    except Exception:
+                        pass
+            finally:
+                ml_pool.shutdown(wait=False, cancel_futures=True)
+            
+            # Merge back any that didn't finish in time
+            enriched_tickers = {r['ticker'] for r in ai_enriched}
+            for r in ranked:
+                if r['ticker'] not in enriched_tickers:
+                    r['signal'] = 'NEUTRAL'
+                    r['direction_prob'] = 50.0
+                    ai_enriched.append(r)
+            
+            ranked = sorted(ai_enriched, key=lambda x: x['confidence'], reverse=True)
+
         # Label confidence tiers
         for r in ranked:
             r['confidence_label'] = _confidence_label(float(r.get('confidence') or 0))
@@ -1946,8 +2057,14 @@ def _sanitize_for_json(obj):
 
 
 @app.route('/api/predict/<ticker>', methods=['POST'])
+@jwt_required()
 def predict_stock(ticker):
     """Generate AI prediction for a stock"""
+    try:
+        ticker = _validate_ticker(ticker)
+    except ValueError as e:
+        return _api_error_response(str(e), 400)
+        
     try:
         data = request.get_json() or {}
         capital = data.get('capital', 100000)
@@ -1973,7 +2090,10 @@ def predict_stock(ticker):
 
         for candidate in prediction_candidates:
             try:
-                candidate_raw = predictor.predict(candidate, capital=float(capital), risk_pct=float(risk_pct))
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(predictor.predict, candidate, capital=float(capital), risk_pct=float(risk_pct))
+                    candidate_raw = future.result()
             except Exception as pred_err:
                 logger.warning(f"Prediction attempt failed for {candidate}: {pred_err}")
                 last_error_payload = {"error": str(pred_err)}
@@ -1993,28 +2113,31 @@ def predict_stock(ticker):
             return jsonify({"error": f"Prediction unavailable for {normalized_ticker}"}), 400
 
         # Adapt UnifiedStockPredictor output to the shape expected by the React UI.
-        rec = raw.get("recommendation", {})
-        price = raw.get("price_analysis", {})
-        trade = raw.get("trade_setup", {})
-        risk = raw.get("risk_management", {})
-        patterns = raw.get("pattern_analysis", {})
-        technicals = raw.get("technical_indicators", {})
-        perf = raw.get("performance_metrics", {})
+        rec = raw.get("recommendation") or {}
+        price = raw.get("price_analysis") or {}
+        trade = raw.get("trade_setup") or {}
+        risk = raw.get("risk_management") or {}
+        patterns = raw.get("pattern_analysis") or {}
+        technicals = raw.get("technical_indicators") or {}
+        perf = raw.get("performance_metrics") or {}
 
         # Build adapted response with all analysis layers
-        detailed = raw.get("detailed_analysis", "")
-        accuracy = raw.get("prediction_accuracy", {})
-        rl_status = raw.get("rl_status", {})
+        detailed = raw.get("detailed_analysis") or ""
+        accuracy = raw.get("prediction_accuracy") or {}
+        rl_status = raw.get("rl_status") or {}
 
         # Determine prediction type: 'ml' if model loaded, 'statistical' otherwise
         is_ml = predictor.model is not None
         pred_type = 'ml' if is_ml else 'statistical'
 
-        # Fetch news sentiment for the prediction response (non-blocking)
+        # Fetch news sentiment for the prediction response (with timeout to avoid blocking)
         news_sentiment = None
         try:
-            stock_news = news_aggregator.get_stock_news(resolved_ticker, limit=5, days_back=7)
-            if stock_news and stock_news.get('articles'):
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(news_aggregator.get_stock_news, resolved_ticker, limit=5, days_back=7)
+                stock_news = future.result(timeout=1.0)
+            if isinstance(stock_news, dict) and stock_news.get('articles'):
                 news_sentiment = {
                     'overall_sentiment': stock_news.get('overall_sentiment', 'NEUTRAL'),
                     'sentiment_score': stock_news.get('aggregate', {}).get('sentiment_score', 0),
@@ -2087,17 +2210,165 @@ def predict_stock(ticker):
             "rl_status": rl_status,
             # News sentiment
             "news_sentiment": news_sentiment,
+            "multi_horizon_analysis": raw.get("multi_horizon_analysis", {}),
             # v14: Risk disclaimer (mandatory for real-world usage)
             "disclaimer": raw.get("disclaimer", {}),
         }
 
+        # v82: Jev pre-trade execution gate (runs AFTER ML prediction, BEFORE order)
+        try:
+            from jev_pretrade_gate import JevPreTradeGate, MarketSnapshot
+            _jev_gate = JevPreTradeGate(timeout_ms=400, enable_fallback=True)
+            _snapshot = MarketSnapshot(
+                ticker=resolved_ticker,
+                ml_probability=float(rec.get('direction_probability', 0.5)),
+                ensemble_std=float(raw.get('ensemble_std', 0.0)),
+                bid_ask_spread_bps=10.0,  # placeholder; use live broker data when available
+                volume_ratio_20d=float(raw.get('volume_ratio', 1.0)),
+                psi_drift_score=float(raw.get('data_drift', {}).get('psi_score', 0.0)),
+                regime_state=str(raw.get('market_regime', {}).get('regime', 'sideways')),
+                atr_pct=float(raw.get('price_analysis', {}).get('atr_pct', 2.0)),
+                signal_type=str(rec.get('signal', 'HOLD')),
+                position_size_pct=float(risk.get('position_pct_of_capital', 1.0)),
+                days_since_last_trade=0,
+            )
+            _jev_decision = _jev_gate.evaluate(_snapshot)
+            adapted['jev_gate'] = {
+                'action': _jev_decision.action,
+                'confidence': round(_jev_decision.action_confidence, 3),
+                'execution_quality': round(_jev_decision.execution_quality_score, 1),
+                'is_liquid': _jev_decision.is_liquid,
+                'approved': _jev_gate.should_execute(_jev_decision),
+                'latency_ms': round(_jev_decision.latency_ms, 1),
+                'fallback_used': _jev_decision.fallback_used,
+            }
+            if not _jev_gate.should_execute(_jev_decision) and adapted.get('signal') in ('BUY', 'SELL'):
+                adapted['signal_before_gate'] = adapted['signal']
+                adapted['signal'] = 'HOLD'
+                adapted['signal_override_reason'] = f"Jev gate: {_jev_decision.action}"
+        except Exception as _jev_err:
+            logger.debug(f"Jev gate skipped: {_jev_err}")
+
         return jsonify(_sanitize_for_json(adapted))
     except Exception as e:
         logger.error(f"Prediction error for {ticker}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
+
+
+@app.route('/api/model/certify', methods=['POST'])
+@jwt_required()
+def certify_model():
+    """Trigger multi-seed model certification."""
+    try:
+        data = request.get_json() or {}
+        k_seeds = data.get('k_seeds', 5)
+        from tasks import certify_model_task
+        task = certify_model_task.delay(k_seeds=k_seeds)
+        return jsonify({
+            "status": "submitted",
+            "task_id": task.id,
+            "message": f"Multi-seed certification started with K={k_seeds}",
+        }), 202
+    except Exception as e:
+        logger.error(f"Certification submission error: {e}")
+        return _api_error_response("Internal server error", 500, details=str(e))
+
+
+# ================================================================
+# v83: MLOps Monitoring & Experiment Tracking Endpoints
+# ================================================================
+
+@app.route('/api/mlops/experiments', methods=['GET'])
+@jwt_required()
+def mlops_experiments():
+    """List all training experiments with metrics."""
+    try:
+        from mlops_tracker import MLOpsTracker
+        tracker = MLOpsTracker()
+        history = tracker.get_experiment_history()
+        return jsonify({
+            'status': 'success',
+            'runs': history,
+            'total_runs': len(history),
+        })
+    except Exception as e:
+        logger.error(f"MLOps experiments error: {e}")
+        return _api_error_response("MLOps not available", 500, details=str(e))
+
+
+@app.route('/api/mlops/drift', methods=['GET'])
+@jwt_required()
+def mlops_drift_report():
+    """Get current data drift metrics."""
+    try:
+        from mlops_tracker import DataDriftMonitor
+        monitor = DataDriftMonitor()
+        report = monitor.get_latest_drift_report()
+        return jsonify({
+            'status': 'success',
+            'drift_report': report,
+        })
+    except Exception as e:
+        logger.error(f"MLOps drift error: {e}")
+        return _api_error_response("Drift monitor not available", 500, details=str(e))
+
+
+@app.route('/api/mlops/performance', methods=['GET'])
+@jwt_required()
+def mlops_performance():
+    """Get rolling model performance metrics."""
+    try:
+        from mlops_tracker import ModelPerformanceMonitor
+        monitor = ModelPerformanceMonitor()
+        report = monitor.get_performance_report()
+        return jsonify({
+            'status': 'success',
+            'performance': report,
+        })
+    except Exception as e:
+        logger.error(f"MLOps performance error: {e}")
+        return _api_error_response("Performance monitor not available", 500, details=str(e))
+
+
+@app.route('/api/mlops/lineage', methods=['GET'])
+@jwt_required()
+def mlops_lineage():
+    """Get model lineage and provenance chain."""
+    try:
+        from mlops_tracker import MLOpsTracker
+        tracker = MLOpsTracker()
+        lineage = tracker.get_model_lineage()
+        return jsonify({
+            'status': 'success',
+            'lineage': lineage,
+        })
+    except Exception as e:
+        logger.error(f"MLOps lineage error: {e}")
+        return _api_error_response("Model lineage not available", 500, details=str(e))
+
+
+@app.route('/api/mlops/compare', methods=['POST'])
+@jwt_required()
+def mlops_compare_runs():
+    """Compare metrics across training runs."""
+    try:
+        data = request.get_json() or {}
+        run_ids = data.get('run_ids', [])
+        from mlops_tracker import MLOpsTracker
+        tracker = MLOpsTracker()
+        comparison = tracker.compare_runs(run_ids)
+        return jsonify({
+            'status': 'success',
+            'comparison': comparison,
+        })
+    except Exception as e:
+        logger.error(f"MLOps compare error: {e}")
+        return _api_error_response("Run comparison failed", 500, details=str(e))
+
 
 
 @app.route('/api/train/<ticker>', methods=['POST'])
+@jwt_required()
 @rate_limit
 def train_model(ticker):
     """Trigger model training/fine-tune for a specific ticker."""
@@ -2117,9 +2388,10 @@ def train_model(ticker):
         })
     except Exception as e:
         logger.error(f"Training error for {ticker}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/model/info', methods=['GET'])
+@jwt_required()
 @rate_limit
 def model_info():
     """Get ML model status, age, accuracy, and training metadata."""
@@ -2183,11 +2455,12 @@ def model_info():
         return jsonify(info)
     except Exception as e:
         logger.error(f"Error getting model info: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 # ==================== REAL-TIME PRICE TARGETS ====================
 
 @app.route('/api/price-target/<ticker>', methods=['GET', 'POST'])
+@jwt_required()
 @rate_limit
 def get_price_target(ticker):
     """
@@ -2208,6 +2481,11 @@ def get_price_target(ticker):
     - signal: BUY/SELL/HOLD
     - confidence: Confidence score (0-100)
     """
+    try:
+        ticker = _validate_ticker(ticker)
+    except ValueError as e:
+        return _api_error_response(str(e), 400)
+        
     try:
         capital = float(request.args.get('capital', 100000))
         risk_pct = float(request.args.get('risk_pct', 2.0))
@@ -2303,15 +2581,16 @@ def get_price_target(ticker):
             "signal_lifecycle": pred.get("signal_lifecycle", {}),
             "execution_plan": pred.get("execution_plan", {}),
             "disclaimer": pred.get("disclaimer", {}),
-            # v34: 5-Pillar Quantitative Intelligence
             "v34_quant_intelligence": pred.get("v34_quant_intelligence", {}),
+            "multi_horizon_analysis": pred.get("multi_horizon_analysis", {}),
         })
         
     except Exception as e:
         logger.error(f"Error fetching price target for {ticker}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/price-targets/batch', methods=['POST'])
+@jwt_required()
 @rate_limit
 def get_batch_price_targets():
     """
@@ -2375,7 +2654,8 @@ def get_batch_price_targets():
                     "signal_policy": pred.get("signal_policy", {}),
                     "pattern_count": patterns.get("pattern_count", 0),
                     "confluence_score": patterns.get("confluence_score", 0),
-                    "position_size": int(risk.get("suggested_quantity", 0))
+                    "position_size": int(risk.get("suggested_quantity", 0)),
+                    "multi_horizon_analysis": pred.get("multi_horizon_analysis", {})
                 })
                 
             except Exception as e:
@@ -2393,9 +2673,10 @@ def get_batch_price_targets():
         
     except Exception as e:
         logger.error(f"Batch price targets error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/price-target/<ticker>/levels', methods=['GET'])
+@jwt_required()
 @rate_limit
 def get_price_levels(ticker):
     """
@@ -2453,7 +2734,7 @@ def get_price_levels(ticker):
             
     except Exception as e:
         logger.error(f"Error fetching price levels for {ticker}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 # ==================== DATA QUALITY & ANALYTICS ENDPOINTS ====================
 
@@ -2470,7 +2751,7 @@ def get_data_quality_report():
         })
     except Exception as e:
         logger.error(f"Error getting data quality report: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/data-quality/reconcile', methods=['POST'])
 @rate_limit
@@ -2487,7 +2768,7 @@ def reconcile_data_quality():
         })
     except Exception as e:
         logger.error(f"Error reconciling data: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/stocks/gaps/<ticker>', methods=['GET'])
 @rate_limit
@@ -2515,7 +2796,7 @@ def detect_trading_gaps(ticker):
         })
     except Exception as e:
         logger.error(f"Error detecting gaps for {ticker}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/stocks/validation/<ticker>', methods=['GET'])
 @rate_limit
@@ -2538,7 +2819,7 @@ def validate_stock_data(ticker):
         })
     except Exception as e:
         logger.error(f"Error validating data for {ticker}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 # ==================== FEATURE ENGINEERING QUALITY ENDPOINTS ====================
 
@@ -2551,7 +2832,7 @@ def get_feature_quality_report():
         
         from FeatureEngineering import PipelineOrchestrator
         feature_orch = PipelineOrchestrator(
-            "postgresql://postgres:Taran%4017@localhost:5432/StockDB"
+            os.getenv("DATABASE_URL", "")
         )
         
         report = feature_orch.get_feature_quality_report(limit_tickers=limit_tickers)
@@ -2563,7 +2844,7 @@ def get_feature_quality_report():
         })
     except Exception as e:
         logger.error(f"Error generating feature quality report: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/features/validate/<ticker>', methods=['GET'])
 @rate_limit
@@ -2572,7 +2853,7 @@ def validate_ticker_features(ticker):
     try:
         from FeatureEngineering import PipelineOrchestrator
         feature_orch = PipelineOrchestrator(
-            "postgresql://postgres:Taran%4017@localhost:5432/StockDB"
+            os.getenv("DATABASE_URL", "")
         )
         
         validation_result = feature_orch.validate_feature_consistency(ticker)
@@ -2584,7 +2865,7 @@ def validate_ticker_features(ticker):
         })
     except Exception as e:
         logger.error(f"Error validating features for {ticker}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/features/quality/<ticker>', methods=['GET'])
 @rate_limit
@@ -2593,7 +2874,7 @@ def get_ticker_feature_quality(ticker):
     try:
         from FeatureEngineering import PipelineOrchestrator
         feature_orch = PipelineOrchestrator(
-            "postgresql://postgres:Taran%4017@localhost:5432/StockDB"
+            os.getenv("DATABASE_URL", "")
         )
         
         with feature_orch.engine.connect() as conn:
@@ -2641,7 +2922,7 @@ def get_ticker_feature_quality(ticker):
             })
     except Exception as e:
         logger.error(f"Error getting feature quality for {ticker}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 # ==================== UTILITY ENDPOINTS ====================
 
@@ -2738,7 +3019,7 @@ def health_model():
 def get_stats():
     """Get database statistics"""
     try:
-        stocks = pipeline.get_latest_data(limit=None)
+        stocks = get_cached_latest_data(pipeline, limit=None)
         return jsonify({
             "total_stocks": len(stocks),
             "database": "operational",
@@ -2752,6 +3033,7 @@ def get_stats():
 # ==================== BACKTESTING ENDPOINTS ====================
 
 @app.route('/api/backtest/<strategy>', methods=['POST'])
+@jwt_required()
 @rate_limit
 def backtest_strategy(strategy):
     """
@@ -2860,7 +3142,7 @@ def backtest_strategy(strategy):
         
     except Exception as e:
         logger.error(f"Backtest error for {strategy}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 def _compute_rsi(series, period=14):
@@ -3259,6 +3541,7 @@ def _generate_custom_strategy_signals(conditions: list, price_data):
 
 
 @app.route('/api/backtest/compare', methods=['POST'])
+@jwt_required()
 @rate_limit
 def compare_strategies():
     """
@@ -3432,10 +3715,11 @@ def compare_strategies():
         
     except Exception as e:
         logger.error(f"Strategy comparison error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 @app.route('/api/backtest/walk-forward', methods=['POST'])
+@jwt_required()
 @rate_limit
 def walk_forward_validate():
     """
@@ -3502,10 +3786,11 @@ def walk_forward_validate():
         
     except Exception as e:
         logger.error(f"Walk-forward validation error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 @app.route('/api/backtest/regimes/<ticker>', methods=['GET'])
+@jwt_required()
 @rate_limit
 def get_market_regimes(ticker):
     """
@@ -3547,7 +3832,66 @@ def get_market_regimes(ticker):
         
     except Exception as e:
         logger.error(f"Regime analysis error for {ticker}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
+
+
+# ==================== UNIVERSE BACKTESTING (Feature #3) ====================
+# Backtest a strategy across an entire index universe (NIFTY50, NIFTY500,
+# NIFTYBANK, sectoral indices) or a custom ticker list, as a background job.
+
+def _universe_single_backtest_factory(payload):
+    """Build a callable(ticker) -> summary dict for universe backtests.
+    Reuses the existing single-ticker path: pipeline history +
+    _generate_strategy_signals + BacktestEngine.backtest_strategy."""
+    strategy = payload.get('strategy', 'momentum')
+    initial_capital = float(payload.get('initial_capital', 100000))
+    start_date = payload.get('start_date')
+    end_date = payload.get('end_date')
+
+    def _run_single(ticker):
+        ticker_data = pipeline.get_ticker_history(ticker)
+        if not ticker_data:
+            raise ValueError(f"No data for {ticker}")
+        price_data = pd.DataFrame([dict(row) for row in ticker_data])
+        if 'date' in price_data.columns:
+            price_data['date'] = pd.to_datetime(price_data['date'])
+            if start_date:
+                price_data = price_data[price_data['date'] >= pd.to_datetime(start_date)]
+            if end_date:
+                price_data = price_data[price_data['date'] <= pd.to_datetime(end_date)]
+        if len(price_data) < 100:
+            raise ValueError(f"Insufficient data for {ticker} ({len(price_data)} bars)")
+
+        config = BacktestConfig(initial_capital=initial_capital)
+        engine = BacktestEngine(data_pipeline=pipeline, config=config)
+        signals = _generate_strategy_signals(strategy, price_data)
+        result = engine.backtest_strategy(signals, price_data, strategy)
+        d = result.to_dict() if hasattr(result, 'to_dict') else dict(result or {})
+        return {
+            'total_return_pct': d.get('total_return_pct'),
+            'cagr_pct': d.get('cagr_pct'),
+            'sharpe_ratio': d.get('sharpe_ratio'),
+            'sortino_ratio': d.get('sortino_ratio'),
+            'max_drawdown_pct': d.get('max_drawdown_pct'),
+            'total_trades': d.get('total_trades'),
+            'win_rate_pct': d.get('win_rate_pct'),
+            'profit_factor': d.get('profit_factor'),
+            'expectancy_per_trade': d.get('expectancy_per_trade'),
+            'final_capital': d.get('final_capital'),
+        }
+
+    return _run_single
+
+
+try:
+    from universe_backtest import create_universe_backtest_blueprint
+
+    app.register_blueprint(create_universe_backtest_blueprint(
+        run_single_factory=_universe_single_backtest_factory,
+    ))
+    logger.info("✅ Universe backtest endpoints registered (/api/backtest/universe*)")
+except Exception as _universe_err:
+    logger.warning(f"⚠️ Universe backtesting unavailable: {_universe_err}")
 
 
 # ==================== RL & PREDICTION TRACKING ENDPOINTS ====================
@@ -3561,7 +3905,7 @@ def get_rl_status():
         return jsonify({"status": "success", **status})
     except Exception as e:
         logger.error(f"RL status error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 @app.route('/api/rl/record-actual', methods=['POST'])
@@ -3588,10 +3932,11 @@ def record_actual_price():
         return jsonify({"status": "success", "result": result})
     except Exception as e:
         logger.error(f"Record actual price error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 @app.route('/api/prediction/accuracy/<ticker>', methods=['GET'])
+@jwt_required()
 @rate_limit
 def get_prediction_accuracy(ticker):
     """Get prediction accuracy history for a specific ticker."""
@@ -3600,10 +3945,11 @@ def get_prediction_accuracy(ticker):
         return jsonify({"status": "success", "ticker": ticker, **accuracy})
     except Exception as e:
         logger.error(f"Prediction accuracy error for {ticker}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 @app.route('/api/prediction/accuracy', methods=['GET'])
+@jwt_required()
 @rate_limit
 def get_global_prediction_accuracy():
     """Get global prediction accuracy across all tracked tickers."""
@@ -3612,7 +3958,7 @@ def get_global_prediction_accuracy():
         return jsonify({"status": "success", **accuracy})
     except Exception as e:
         logger.error(f"Global prediction accuracy error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 # ==================== CUSTOM STRATEGY EXECUTION ====================
 
@@ -3704,6 +4050,7 @@ def _expand_custom_conditions(conditions: list) -> list:
 
 
 @app.route('/api/screen/custom/run/<strategy_name>', methods=['POST'])
+@jwt_required()
 @rate_limit
 def run_custom_strategy_screening(strategy_name):
     """
@@ -3800,6 +4147,7 @@ def run_custom_strategy_screening(strategy_name):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/backtest/custom/<strategy_name>', methods=['POST'])
+@jwt_required()
 @rate_limit
 def backtest_custom_strategy(strategy_name):
     """
@@ -3887,9 +4235,10 @@ def backtest_custom_strategy(strategy_name):
         
     except Exception as e:
         logger.error(f"Custom strategy backtest error for {strategy_name}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/compare/strategies', methods=['POST'])
+@jwt_required()
 @rate_limit
 def compare_custom_strategies():
     """
@@ -4004,11 +4353,12 @@ def compare_custom_strategies():
         
     except Exception as e:
         logger.error(f"Strategy comparison error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 # ==================== MULTI-STRATEGY SCREENING ====================
 
 @app.route('/api/screen/multi', methods=['POST'])
+@jwt_required()
 @rate_limit
 def screen_multi_strategy():
     """
@@ -4139,9 +4489,10 @@ def screen_multi_strategy():
         
     except Exception as e:
         logger.error(f"Multi-strategy screening error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/screen/multi/stream', methods=['POST'])
+@jwt_required()
 def screen_multi_strategy_stream():
     """
     Stream progress events via SSE, then final results for multi-strategy screening
@@ -4259,11 +4610,12 @@ def screen_multi_strategy_stream():
         
     except Exception as e:
         logger.error(f"Multi-strategy stream start error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 # ==================== STRATEGY MANAGEMENT ENDPOINTS ====================
 
 @app.route('/api/screener/catalog', methods=['GET'])
+@jwt_required()
 @rate_limit
 def get_indicator_catalog():
     """Get complete indicator catalog for building custom strategies"""
@@ -4298,6 +4650,7 @@ def get_indicator_catalog():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/screener/strategies', methods=['GET', 'POST'])
+@jwt_required()
 @rate_limit
 def manage_strategies():
     """Get all strategies or create a new custom strategy"""
@@ -4397,6 +4750,7 @@ def manage_strategies():
             return jsonify({'error': str(e)}), 500
 
 @app.route('/api/screener/strategies/<strategy_name>', methods=['DELETE'])
+@jwt_required()
 @rate_limit
 def delete_strategy(strategy_name):
     """Delete a custom strategy"""
@@ -4428,6 +4782,7 @@ def delete_strategy(strategy_name):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/screener/strategies/validate', methods=['POST'])
+@jwt_required()
 @rate_limit
 def validate_strategy():
     """Validate a strategy configuration"""
@@ -4485,7 +4840,7 @@ def screener_configuration():
                 "config": asdict(screener_config)
             })
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/cache/clear', methods=['POST'])
 @rate_limit
@@ -4502,7 +4857,7 @@ def clear_cache():
             "message": "Cache cleared successfully"
         })
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/download/<filename>', methods=['GET'])
 @rate_limit
@@ -4514,18 +4869,53 @@ def download_file(filename):
         
         return send_file(filename, as_attachment=True)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 # ==================== WATCHLIST/PORTFOLIO ENDPOINTS ====================
 
-# In-memory watchlist (in production, use database)
-user_watchlist = []
+def _get_watchlist_file(user_id):
+    import os
+    watchlist_dir = 'data'
+    os.makedirs(watchlist_dir, exist_ok=True)
+    return os.path.join(watchlist_dir, f'watchlist_{user_id}.json')
+
+def _load_user_watchlist(user_id):
+    import json
+    import os
+    file_path = _get_watchlist_file(user_id)
+    if os.path.exists(file_path):
+        try:
+            with open(file_path, 'r') as f:
+                return json.load(f).get('watchlist', [])
+        except Exception:
+            pass
+    return []
+
+def _save_user_watchlist(user_id, watchlist):
+    import json
+    import tempfile
+    import os
+    file_path = _get_watchlist_file(user_id)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir='data', suffix='.tmp')
+    try:
+        with os.fdopen(tmp_fd, 'w') as f:
+            json.dump({'watchlist': watchlist}, f, indent=4)
+        os.replace(tmp_path, file_path)
+    except Exception:
+        os.unlink(tmp_path)
 
 @app.route('/api/watchlist', methods=['GET', 'POST', 'DELETE'])
+@jwt_required(optional=True)
 @rate_limit
 def manage_watchlist():
     """Manage user watchlist"""
-    global user_watchlist
+    try:
+        current_user = get_jwt_identity()
+    except Exception:
+        current_user = None
+    
+    user_id = str(current_user.get('id', 'default')) if current_user else 'default'
+    user_watchlist = _load_user_watchlist(user_id)
     
     if request.method == 'GET':
         return jsonify({
@@ -4543,7 +4933,8 @@ def manage_watchlist():
         
         if ticker not in user_watchlist:
             user_watchlist.append(ticker)
-            logger.info(f"Added {ticker} to watchlist")
+            _save_user_watchlist(user_id, user_watchlist)
+            logger.info(f"Added {ticker} to watchlist for user {user_id}")
         
         return jsonify({
             "status": "success",
@@ -4557,7 +4948,8 @@ def manage_watchlist():
         
         if ticker in user_watchlist:
             user_watchlist.remove(ticker)
-            logger.info(f"Removed {ticker} from watchlist")
+            _save_user_watchlist(user_id, user_watchlist)
+            logger.info(f"Removed {ticker} from watchlist for user {user_id}")
         
         return jsonify({
             "status": "success",
@@ -4684,7 +5076,7 @@ def get_portfolio():
                     price = info.get('currentPrice') or info.get('regularMarketPrice') or info.get('previousClose')
                     if price and price > 0:
                         return price
-                except:
+                except Exception:
                     continue
                     
             # Fallback: try download for 1 day
@@ -4696,7 +5088,7 @@ def get_portfolio():
                         close = data['Close'].iloc[-1]
                         if close > 0:
                             return float(close)
-                except:
+                except Exception:
                     continue
             return None
         
@@ -4727,7 +5119,7 @@ def get_portfolio():
                                         val = float(last_prices[nse_ticker])
                                         if val > 0:
                                             current_prices[orig_ticker] = val
-                            except:
+                            except Exception:
                                 pass
                 
                 # For any tickers that failed, try individual fetch
@@ -4745,7 +5137,7 @@ def get_portfolio():
                         price = fetch_price_with_suffix(ticker)
                         if price:
                             current_prices[ticker] = price
-                    except:
+                    except Exception:
                         pass
 
         # Pass user_id and prices
@@ -4753,7 +5145,7 @@ def get_portfolio():
         return jsonify(data)
     except Exception as e:
         logger.error(f"Error fetching portfolio: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/portfolio/transaction', methods=['POST'])
 @rate_limit
@@ -4776,7 +5168,7 @@ def add_transaction():
         )
         return jsonify({"message": "Transaction added", "transaction": txn})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/portfolio/transaction/<txn_id>', methods=['DELETE'])
 @rate_limit
@@ -4789,7 +5181,7 @@ def delete_transaction(txn_id):
             return jsonify({"message": "Transaction deleted"})
         return jsonify({"error": "Transaction not found"}), 404
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 # ==================== NEWS ENDPOINTS ====================
@@ -4810,7 +5202,7 @@ def get_news_providers():
         })
     except Exception as e:
         logger.error(f"Error getting news providers: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/news/market', methods=['GET'])
 @rate_limit
@@ -4826,7 +5218,7 @@ def get_market_news():
         })
     except Exception as e:
         logger.error(f"Error fetching market news: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/news/stock/<symbol>', methods=['GET'])
 @rate_limit
@@ -4845,7 +5237,7 @@ def get_stock_news(symbol):
         })
     except Exception as e:
         logger.error(f"Error fetching news for {symbol}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/news/portfolio', methods=['GET'])
 @rate_limit
@@ -4880,7 +5272,7 @@ def get_portfolio_news():
         })
     except Exception as e:
         logger.error(f"Error fetching portfolio news: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/sentiment/<ticker>', methods=['GET'])
 @rate_limit
@@ -4905,68 +5297,28 @@ def get_sentiment(ticker):
         return jsonify({"status": "success", "data": result})
     except Exception as e:
         logger.error(f"Error fetching sentiment for {ticker}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
-# ==================== SCHEDULER ENDPOINTS ====================
-
-@app.route('/api/scheduler/status', methods=['GET'])
-@rate_limit
-def get_scheduler_status():
-    """Get current scheduler status"""
-    try:
-        status = data_scheduler.get_status()
-        return jsonify(status)
-    except Exception as e:
-        logger.error(f"Error getting scheduler status: {e}")
-        return jsonify({"error": str(e)}), 500
+# ==================== CELERY SCHEDULER ENDPOINTS ====================
+# Deprecated: The APScheduler has been replaced by Celery.
+# The `/api/scheduler/trigger` now directly dispatches a Celery task.
 
 @app.route('/api/scheduler/trigger', methods=['POST'])
-@rate_limit
-def trigger_data_update():
-    """Manually trigger a data update"""
+@jwt_required()
+def trigger_scheduler_task():
+    """Trigger the data pipeline via Celery manually."""
     try:
-        result = data_scheduler.trigger_now()
-        return jsonify(result)
-    except Exception as e:
-        logger.error(f"Error triggering data update: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/scheduler/history', methods=['GET'])
-@rate_limit
-def get_scheduler_history():
-    """Get recent pipeline execution history with per-step details"""
-    try:
-        limit = request.args.get('limit', 20, type=int)
-        history = data_scheduler.get_job_history(limit)
+        from tasks import run_feature_engineering_task
+        task = run_feature_engineering_task.delay()
         return jsonify({
-            "status": "success",
-            "count": len(history),
-            "history": history,
-        })
+            "message": "Data pipeline triggered successfully via Celery.",
+            "task_id": str(task.id),
+            "status": "triggered"
+        }), 200
     except Exception as e:
-        logger.error(f"Error getting scheduler history: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/scheduler/schedule', methods=['POST'])
-@rate_limit
-def update_schedule():
-    """Update the scheduler time"""
-    try:
-        data = request.get_json() or {}
-        hour = data.get('hour', 16)
-        minute = data.get('minute', 0)
-        
-        if data_scheduler.update_schedule(hour, minute):
-            return jsonify({
-                "status": "success",
-                "message": f"Schedule updated to {hour}:{minute:02d}",
-                "schedule": f"{hour}:{minute:02d} IST"
-            })
-        return jsonify({"error": "Invalid schedule parameters"}), 400
-    except Exception as e:
-        logger.error(f"Error updating schedule: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Error triggering celery task: {e}")
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 # ==================== EXCHANGE ENDPOINTS ====================
 
@@ -4983,7 +5335,7 @@ def get_exchanges():
         })
     except Exception as e:
         logger.error(f"Error getting exchanges: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/exchanges/default', methods=['POST'])
 @rate_limit
@@ -5002,7 +5354,7 @@ def set_default_exchange():
         return jsonify({"error": f"Unsupported exchange: {exchange}"}), 400
     except Exception as e:
         logger.error(f"Error setting default exchange: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/exchanges/<exchange>/stock/<symbol>', methods=['GET'])
 @rate_limit
@@ -5025,7 +5377,7 @@ def get_exchange_stock_data(exchange, symbol):
         })
     except Exception as e:
         logger.error(f"Error fetching {symbol} from {exchange}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 @app.route('/api/exchanges/<exchange>/live/<symbol>', methods=['GET'])
 @rate_limit
@@ -5043,7 +5395,7 @@ def get_exchange_live_price(exchange, symbol):
         })
     except Exception as e:
         logger.error(f"Error fetching live price for {symbol} from {exchange}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 # ==================== ADVANCED STRATEGY ENGINE ENDPOINTS (Patent-Pending) ====================
@@ -5066,7 +5418,7 @@ def get_strategy_catalog():
         })
     except Exception as e:
         logger.error(f"Strategy catalog error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 @app.route('/api/strategies/evaluate/<ticker>', methods=['POST'])
@@ -5101,13 +5453,13 @@ def evaluate_strategies(ticker):
         return jsonify({
             "status": "success",
             "ticker": _base_ticker_symbol(normalized_ticker),
-            "source_symbol": yf_symbol,
+            "source_symbol": _to_yfinance_symbol(normalized_ticker, exchange='NSE'),
             "strategies_evaluated": len(results),
             "results": results,
         })
     except Exception as e:
         logger.error(f"Strategy evaluation error for {ticker}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 @app.route('/api/strategies/multi-screen/<ticker>', methods=['POST'])
@@ -5146,12 +5498,12 @@ def multi_strategy_screen(ticker):
         return jsonify({
             "status": "success",
             "ticker": _base_ticker_symbol(normalized_ticker),
-            "source_symbol": yf_symbol,
+            "source_symbol": _to_yfinance_symbol(normalized_ticker, exchange='NSE'),
             **result,
         })
     except Exception as e:
         logger.error(f"Multi-strategy screen error for {ticker}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 @app.route('/api/strategies/sector-rotation', methods=['GET'])
@@ -5171,7 +5523,7 @@ def get_sector_rotation():
         })
     except Exception as e:
         logger.error(f"Sector rotation error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 @app.route('/api/strategies/custom', methods=['POST'])
@@ -5198,7 +5550,7 @@ def add_custom_strategy():
         return jsonify({"status": "success", "message": f"Strategy '{name}' added"})
     except Exception as e:
         logger.error(f"Custom strategy error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 # ==================== FUNDAMENTAL ANALYSIS ENDPOINTS (Patent-Pending) ====================
@@ -5226,7 +5578,7 @@ def get_fundamentals(ticker):
         })
     except Exception as e:
         logger.error(f"Fundamentals error for {ticker}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 @app.route('/api/fundamentals/<ticker>/piotroski', methods=['GET'])
@@ -5245,7 +5597,7 @@ def get_piotroski_score(ticker):
         return jsonify({"status": "success", **result})
     except Exception as e:
         logger.error(f"Piotroski error for {ticker}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 @app.route('/api/fundamentals/compare', methods=['POST'])
@@ -5277,7 +5629,7 @@ def compare_fundamentals():
         })
     except Exception as e:
         logger.error(f"Fundamentals comparison error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 @app.route('/api/fundamentals/<ticker>/statements', methods=['GET'])
@@ -5310,7 +5662,7 @@ def get_financial_statements(ticker):
         return jsonify({"status": "success", "ticker": normalized_ticker, **serializable})
     except Exception as e:
         logger.error(f"Financial statements error for {ticker}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 # ==================== RISK ANALYTICS ENDPOINTS (Patent-Pending) ====================
@@ -5360,7 +5712,7 @@ def get_risk_metrics(ticker):
         })
     except Exception as e:
         logger.error(f"Risk analytics error for {ticker}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 @app.route('/api/risk/portfolio', methods=['POST'])
@@ -5405,7 +5757,7 @@ def analyze_portfolio_risk():
         })
     except Exception as e:
         logger.error(f"Portfolio risk error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 @app.route('/api/risk/efficient-frontier', methods=['POST'])
@@ -5451,7 +5803,7 @@ def generate_efficient_frontier():
         })
     except Exception as e:
         logger.error(f"Efficient frontier error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 @app.route('/api/risk/compare', methods=['POST'])
@@ -5490,7 +5842,7 @@ def compare_stock_risk():
         })
     except Exception as e:
         logger.error(f"Stock comparison error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 # ==================== EXPORT ENDPOINTS ====================
@@ -5650,7 +6002,7 @@ def export_stock_report(ticker):
             return jsonify(html)
     except Exception as e:
         logger.error(f"Export error for {ticker}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
 
 
@@ -5669,8 +6021,234 @@ def export_screener_results():
                                    headers={"Content-Disposition": "attachment; filename=screener_results.csv"})
     except Exception as e:
         logger.error(f"Export screener error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return _api_error_response("Internal server error", 500, details=str(e))
 
+
+# ==================== MULTI-STRATEGY SCREENER (Feature #1) ====================
+# Combined AND/OR screening across multiple strategies over the full NSE
+# universe, with async background jobs + status polling for low latency.
+try:
+    from MultiStrategyScreener import create_multi_screener_blueprint
+
+    app.register_blueprint(create_multi_screener_blueprint(
+        get_screener=lambda: screener,
+        get_pipeline=lambda: pipeline,
+    ))
+    logger.info("✅ Multi-strategy screener endpoints registered (/api/screener/multi/*)")
+except Exception as _multi_err:
+    logger.warning(f"⚠️ Multi-strategy screener unavailable: {_multi_err}")
+
+
+# ==================== BEGINNER MODE (LLM) ====================
+
+@app.route('/api/risk/<ticker>/beginner-summary', methods=['GET'])
+@rate_limit
+def get_beginner_risk_summary(ticker):
+    """Generate a beginner-friendly natural language summary of risk metrics using LLM."""
+    try:
+        import google.generativeai as genai
+        
+        normalized_ticker = exchange_manager.normalize_ticker(ticker)
+        
+        # Gather risk metrics from predictor
+        pred = predictor.predict(normalized_ticker)
+        risk = pred.get("risk_management", {})
+        
+        if not risk:
+            return jsonify({"error": "Risk data not available for this ticker."}), 404
+            
+        gemini_api_key = os.getenv('GEMINI_API_KEY')
+        if not gemini_api_key:
+            return jsonify({
+                "status": "success", 
+                "summary": "Gemini API key is missing. Cannot generate natural language summary. Please refer to the raw metrics."
+            })
+            
+        genai.configure(api_key=gemini_api_key)
+        
+        prompt = f"""
+        You are a financial advisor explaining risk to a beginner investor.
+        Explain the risk profile for the stock {normalized_ticker} based on the following technical metrics:
+        - Max Loss Amount: {risk.get('max_loss_amount', 'N/A')}
+        - Suggested Position Size: {risk.get('position_size', 'N/A')}
+        - Risk per Share: {risk.get('risk_per_share', 'N/A')}
+        - Reward per Share: {risk.get('reward_per_share', 'N/A')}
+        - Sizing Method Used: {risk.get('sizing_method', 'N/A')}
+        
+        Provide a short (3-4 sentences), easy-to-understand summary. Avoid complex jargon. Be objective and cautious.
+        Do not provide financial advice to buy or sell, only explain the risk.
+        """
+        
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(prompt)
+        
+        return jsonify({
+            "status": "success",
+            "summary": response.text.strip()
+        })
+    except Exception as e:
+        logger.error(f"Error generating beginner summary for {ticker}: {e}")
+        return _api_error_response("Internal server error", 500, details=str(e))
+
+# ==================== WEBSOCKETS ====================
+
+_subscribed_tickers = set()
+
+@socketio.on('connect')
+def handle_connect():
+    logger.info(f"🟢 WebSocket client connected: {request.sid}")
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    logger.info(f"🔴 WebSocket client disconnected: {request.sid}")
+
+@socketio.on('subscribe')
+def handle_subscribe(data):
+    ticker = data.get('ticker')
+    if ticker:
+        # Flask-SocketIO supports rooms for pub/sub
+        from flask_socketio import join_room
+        join_room(ticker)
+        _subscribed_tickers.add(ticker)
+        logger.info(f"📡 Client {request.sid} subscribed to {ticker}")
+
+@socketio.on('unsubscribe')
+def handle_unsubscribe(data):
+    ticker = data.get('ticker')
+    if ticker:
+        from flask_socketio import leave_room
+        leave_room(ticker)
+        logger.info(f"🔌 Client {request.sid} unsubscribed from {ticker}")
+
+def background_quote_emitter():
+    """Background task to fetch live quotes for subscribed tickers and emit them via SocketIO."""
+    import yfinance as yf
+    while True:
+        socketio.sleep(5)
+        tickers = list(_subscribed_tickers)
+        if not tickers:
+            continue
+            
+        try:
+            # Add .NS for NSE stocks
+            yf_tickers = [t + '.NS' if not t.endswith('.NS') and not t.startswith('^') else t for t in tickers]
+            data = yf.download(yf_tickers, period='1d', interval='1m', progress=False, threads=False)
+            
+            if data.empty:
+                continue
+                
+            for i, ticker in enumerate(tickers):
+                yf_ticker = yf_tickers[i]
+                if len(tickers) == 1:
+                    close_s = data['Close'].dropna()
+                    open_s = data['Open'].dropna()
+                    if close_s.empty or open_s.empty:
+                        continue
+                    close_val = close_s.iloc[-1]
+                    open_val = open_s.iloc[0]
+                    vol_s = data['Volume'].dropna()
+                    vol_val = vol_s.iloc[-1] if not vol_s.empty else 0
+                    high_val = data['High'].max()
+                    low_val = data['Low'].min()
+                else:
+                    if yf_ticker not in data['Close']: continue
+                    close_s = data['Close'][yf_ticker].dropna()
+                    open_s = data['Open'][yf_ticker].dropna()
+                    if close_s.empty or open_s.empty:
+                        continue
+                    close_val = close_s.iloc[-1]
+                    open_val = open_s.iloc[0]
+                    vol_s = data['Volume'][yf_ticker].dropna()
+                    vol_val = vol_s.iloc[-1] if not vol_s.empty else 0
+                    high_val = data['High'][yf_ticker].dropna().max()
+                    low_val = data['Low'][yf_ticker].dropna().min()
+                
+                change_pct = ((close_val - open_val) / open_val) * 100 if open_val else 0
+                
+                quote_data = {
+                    'ticker': ticker,
+                    'price': float(close_val),
+                    'change_pct': float(change_pct),
+                    'volume': int(vol_val),
+                    'day_high': float(high_val),
+                    'day_low': float(low_val)
+                }
+                
+                socketio.emit('quote_update', quote_data, room=ticker)
+                
+        except Exception as e:
+            logger.error(f"Quote emitter error: {e}")
+
+# Start the background task
+socketio.start_background_task(background_quote_emitter)
+
+# ==================== CHART ROUTES ====================
+
+from chart_generator import generate_plotly_pattern_chart
+
+@app.route('/api/chart/pattern/<ticker>', methods=['GET'])
+def get_pattern_chart(ticker):
+    """Returns a Plotly JSON chart with patterns overlaid."""
+    df = pipeline.get_ticker_history(ticker)
+    if not df or len(df) == 0:
+        return jsonify({"error": f"No historical data found for {ticker}"}), 404
+        
+    try:
+        import pandas as pd
+        df = pd.DataFrame(df)
+        df.set_index('date', inplace=True)
+        df.index = pd.to_datetime(df.index)
+        
+        chart_json = generate_plotly_pattern_chart(df, ticker)
+        return chart_json, 200, {'Content-Type': 'application/json'}
+    except Exception as e:
+        logger.error(f"Error generating chart for {ticker}: {str(e)}")
+        return _api_error_response("Internal server error", 500, details=str(e))
+
+# ==================== AGENT ROUTES ====================
+
+from flask import Response, stream_with_context
+
+@app.route('/api/agent/chat', methods=['POST'])
+@jwt_required()
+def agent_chat():
+    """Stream chat responses from the LangGraph agent"""
+    if not agent:
+        return jsonify({"error": "Agent is not initialized"}), 503
+        
+    data = request.json
+    message = data.get("message")
+    session_id = data.get("session_id", "default_session")
+    
+    if not message:
+        return jsonify({"error": "Message is required"}), 400
+
+    def generate():
+        try:
+            for chunk in agent.stream(message, session_id):
+                yield chunk
+        except Exception as e:
+            logger.error(f"Agent stream error: {e}")
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            yield "data: [DONE]\n\n"
+
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+
+@app.route('/api/agent/clear', methods=['POST'])
+@jwt_required()
+def agent_clear():
+    """Clear agent session history"""
+    if not agent:
+        return jsonify({"error": "Agent is not initialized"}), 503
+        
+    data = request.json
+    session_id = data.get("session_id")
+    
+    if not session_id:
+        return jsonify({"error": "session_id is required"}), 400
+        
+    agent.clear_session(session_id)
+    return jsonify({"message": f"Session {session_id} cleared"})
 
 # ==================== MAIN ====================
 
@@ -5684,10 +6262,10 @@ if __name__ == '__main__':
     logger.info("🌐 Multi-Exchange: NSE, BSE, NYSE, NASDAQ, LSE supported")
     logger.info("📤 Exports: HTML reports, CSV, JSON")
     logger.info(f"⚙️ Runtime: env={APP_ENV} debug={APP_DEBUG} reloader={APP_USE_RELOADER} host={APP_HOST} port={APP_PORT}")
-    app.run(
+    socketio.run(
+        app,
         host=APP_HOST,
         port=APP_PORT,
         debug=APP_DEBUG,
-        threaded=APP_THREADED,
-        use_reloader=APP_USE_RELOADER,
+        use_reloader=APP_USE_RELOADER
     )

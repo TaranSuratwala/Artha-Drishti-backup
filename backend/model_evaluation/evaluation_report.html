@@ -1,0 +1,62 @@
+
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>ML Model Evaluation Report</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+                .container { max-width: 1200px; margin: auto; background: white; padding: 30px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+                h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }
+                h2 { color: #34495e; margin-top: 30px; }
+                .metric { background: #ecf0f1; padding: 15px; margin: 10px 0; border-left: 4px solid #3498db; }
+                .success { color: #27ae60; font-weight: bold; }
+                .warning { color: #f39c12; font-weight: bold; }
+                .error { color: #e74c3c; font-weight: bold; }
+                table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+                th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+                th { background-color: #3498db; color: white; }
+                img { max-width: 100%; height: auto; margin: 20px 0; }
+                .timestamp { color: #7f8c8d; font-style: italic; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>[REPORT] ML Model Evaluation Report</h1>
+                <p class="timestamp">Generated: 2026-06-04 09:34:33</p>
+                
+                <h2>[SUMMARY] Executive Summary</h2>
+                <div class="metric">
+                    <p>Comprehensive evaluation of the stock prediction ML model</p>
+                    <p>Evaluation includes live testing, backtesting, statistical analysis, and deployment readiness</p>
+                </div>
+                
+                <h2>[METRICS] Performance Metrics</h2>
+                <img src="performance_metrics.png" alt="Performance Metrics">
+                
+                <h2>[DIRECTION] Direction Prediction</h2>
+                <img src="confusion_matrix.png" alt="Confusion Matrix">
+                
+                <h2>[TRADING] Trading Performance</h2>
+                <img src="trading_metrics.png" alt="Trading Metrics">
+                
+                <h2>[READINESS] Deployment Readiness</h2>
+                <p>See deployment_readiness.json for detailed checklist</p>
+                
+                <h2>[RESULTS] Detailed Results</h2>
+                <ul>
+                    <li>Live Performance: live_performance_test.json</li>
+                    <li>Walk-Forward Backtest: walk_forward_backtest.json</li>
+                    <li>Statistical Tests: statistical_significance.json</li>
+                    <li>Production Metrics: production_metrics.json</li>
+                </ul>
+                
+                <h2>[RECOMMENDATIONS] Recommendations</h2>
+                <div class="metric">
+                    <p><strong>Model Performance:</strong> Review direction accuracy and price MAPE</p>
+                    <p><strong>Trading Strategy:</strong> Validate risk management parameters</p>
+                    <p><strong>Deployment:</strong> Complete infrastructure and monitoring setup</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        

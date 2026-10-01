@@ -3,7 +3,7 @@ import React, { useState, useRef, useCallback, useMemo } from 'react';
 /**
  * Interactive SVG Price Chart with hover crosshair, tooltip, OHLC data, and volume bars.
  */
-export const PriceChart = ({ data, height = 340, showVolume = true }) => {
+export const PriceChart = React.memo(({ data, height = 340, showVolume = true }) => {
     const [hover, setHover] = useState(null);
     const svgRef = useRef(null);
     const points = useMemo(() => (Array.isArray(data) ? data : []), [data]);
@@ -157,6 +157,6 @@ export const PriceChart = ({ data, height = 340, showVolume = true }) => {
             </svg>
         </div>
     );
-};
+});
 
 export default PriceChart;

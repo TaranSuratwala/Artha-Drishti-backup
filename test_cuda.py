@@ -1,0 +1,1 @@
+﻿import sys; import torch; print(" Executable:\, sys.executable); print(\PyTorch version:\, torch.__version__); print(\CUDA is_available:\, torch.cuda.is_available()); print(\CUDA device count:\, torch.cuda.device_count());

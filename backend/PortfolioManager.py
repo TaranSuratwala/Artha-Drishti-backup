@@ -1,5 +1,8 @@
 import json
 import os
+import tempfile
+import threading
+from collections import defaultdict
 from datetime import datetime
 import logging
 
@@ -12,6 +15,8 @@ class PortfolioManager:
     """
     def __init__(self, data_dir='data'):
         self.data_dir = data_dir
+        # Per-user locks to prevent concurrent read/write corruption
+        self._user_locks = defaultdict(threading.Lock)
         # Ensure data directory exists
         os.makedirs(os.path.abspath(data_dir), exist_ok=True)
 
@@ -42,59 +47,114 @@ class PortfolioManager:
             return {'transactions': [], 'holdings': {}}
 
     def _save_data(self, user_id, data):
-        """Save portfolio data to user-specific JSON file"""
+        """Save portfolio data to user-specific JSON file atomically."""
         file_path = self._get_user_file(user_id)
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=os.path.abspath(self.data_dir), suffix='.tmp'
+        )
         try:
-            with open(file_path, 'w') as f:
+            with os.fdopen(tmp_fd, 'w') as f:
                 json.dump(data, f, indent=4)
+            os.replace(tmp_path, file_path)
         except Exception as e:
             logger.error(f"Error saving portfolio data for user {user_id}: {e}")
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def add_transaction(self, user_id, ticker, type, quantity, price, date=None):
-        """Add a buy/sell transaction and update holdings"""
-        data = self._load_data(user_id)
-        
-        if not date:
-            date = datetime.now().isoformat()
-        
-        transaction = {
-            'id': str(int(datetime.now().timestamp() * 1000)), # Simple unique ID
-            'ticker': ticker.upper(),
-            'type': type.upper(), # 'BUY' or 'SELL'
-            'quantity': float(quantity),
-            'price': float(price),
-            'date': date
-        }
-        
-        data['transactions'].append(transaction)
-        self._recalculate_holdings(data)
-        self._save_data(user_id, data)
-        
+        """Add a buy/sell transaction and update holdings.
+
+        Args:
+            user_id: User identifier.
+            ticker: Stock ticker symbol.
+            type: Transaction type ('BUY' or 'SELL').
+            quantity: Number of shares (must be > 0).
+            price: Price per share (must be > 0).
+            date: Optional ISO-format date string.
+
+        Returns:
+            dict: The created transaction record.
+
+        Raises:
+            ValueError: If quantity <= 0, price <= 0, or insufficient shares
+                for a SELL transaction.
+        """
+        quantity = float(quantity)
+        price = float(price)
+
+        if quantity <= 0:
+            raise ValueError(f"Quantity must be positive, got {quantity}")
+        if price <= 0:
+            raise ValueError(f"Price must be positive, got {price}")
+
+        tx_type = type.upper()
+        ticker_upper = ticker.upper()
+
+        with self._user_locks[user_id]:
+            data = self._load_data(user_id)
+
+            # For SELL transactions, verify the user owns enough shares
+            if tx_type == 'SELL':
+                current_qty = data['holdings'].get(ticker_upper, {}).get('quantity', 0.0)
+                if current_qty < quantity:
+                    raise ValueError(
+                        f"Insufficient shares of {ticker_upper} to sell: "
+                        f"requested {quantity}, available {current_qty}"
+                    )
+
+            if not date:
+                date = datetime.now().isoformat()
+
+            transaction = {
+                'id': str(int(datetime.now().timestamp() * 1000)),  # Simple unique ID
+                'ticker': ticker_upper,
+                'type': tx_type,  # 'BUY' or 'SELL'
+                'quantity': quantity,
+                'price': price,
+                'date': date
+            }
+
+            data['transactions'].append(transaction)
+            self._recalculate_holdings(data)
+            self._save_data(user_id, data)
+
         return transaction
 
     def delete_transaction(self, user_id, transaction_id):
         """Delete a transaction by ID"""
-        data = self._load_data(user_id)
-        initial_len = len(data['transactions'])
-        
-        data['transactions'] = [t for t in data['transactions'] if t['id'] != str(transaction_id)]
-        
-        if len(data['transactions']) < initial_len:
-            self._recalculate_holdings(data)
-            self._save_data(user_id, data)
-            return True
-        return False
+        with self._user_locks[user_id]:
+            data = self._load_data(user_id)
+            initial_len = len(data['transactions'])
+
+            data['transactions'] = [t for t in data['transactions'] if t['id'] != str(transaction_id)]
+
+            if len(data['transactions']) < initial_len:
+                self._recalculate_holdings(data)
+                self._save_data(user_id, data)
+                return True
+            return False
 
     def reset_portfolio(self, user_id):
         """Clear all transactions and holdings"""
-        data = {'transactions': [], 'holdings': {}}
-        self._save_data(user_id, data)
+        with self._user_locks[user_id]:
+            data = {'transactions': [], 'holdings': {}}
+            self._save_data(user_id, data)
 
     def _recalculate_holdings(self, data):
-        """Recalculate current holdings based on all transactions"""
+        """Recalculate current holdings based on all transactions.
+
+        Transactions are sorted by date before processing so that backdated
+        entries produce correct average prices.
+        """
         holdings = {}
-        
-        for t in data['transactions']:
+
+        # Sort by date to ensure chronological processing
+        sorted_transactions = sorted(data['transactions'], key=lambda t: t.get('date', ''))
+
+        for t in sorted_transactions:
             ticker = t['ticker']
             qty = t['quantity']
             price = t['price']
@@ -138,7 +198,9 @@ class PortfolioManager:
         Get portfolio summary with calculated P&L using current prices.
         current_prices: Dict[ticker, price]
         """
-        data = self._load_data(user_id)
+        with self._user_locks[user_id]:
+            data = self._load_data(user_id)
+
         holdings_list = []
         total_value = 0.0
         total_cost = 0.0

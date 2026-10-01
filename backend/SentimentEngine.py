@@ -51,6 +51,39 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 # ---- Try importing optional NLP packages ----
+_HAS_FINBERT = False
+_finbert_pipeline = None
+_finbert_load_attempted = False
+try:
+    from transformers import pipeline
+    import torch
+    _HAS_FINBERT = True  # availability = import succeeded; actual model loads lazily below
+except Exception as exc:
+    logger.warning(f"transformers/torch unavailable, FinBERT disabled: {exc}")
+
+def _get_finbert_pipeline():
+    """Lazy singleton. Avoids eager load at import time (was duplicated in every
+    Windows DataLoader worker subprocess via spawn-reimport) and forces native
+    PyTorch weights: framework left unset let transformers auto-pick TF when both
+    backends are installed, and PT->TF conversion was silently dropping the
+    trained classification head ('newly initialized: [classifier]' in logs),
+    making every sentiment score noise."""
+    global _finbert_pipeline, _finbert_load_attempted, _HAS_FINBERT
+    if _finbert_pipeline is not None or _finbert_load_attempted or not _HAS_FINBERT:
+        return _finbert_pipeline
+    _finbert_load_attempted = True
+    try:
+        device = 0 if torch.cuda.is_available() else -1
+        _finbert_pipeline = pipeline(
+            "sentiment-analysis", model="ProsusAI/finbert",
+            framework="pt", truncation=True, max_length=512, device=device,
+        )
+        logger.info(f"FinBERT model loaded successfully on device: {device}.")
+    except Exception as exc:
+        logger.warning(f"FinBERT failed to load, falling back to basic NLP: {exc}")
+        _HAS_FINBERT = False
+    return _finbert_pipeline
+
 _HAS_VADER = False
 _vader_import_error = None
 try:
@@ -177,20 +210,38 @@ class SentimentAnalyzer:
             return self._neutral_result()
         
         text_clean = text.strip()
+        finbert = _get_finbert_pipeline()
         
-        # ---- Component 1: VADER ----
+        # ---- Component 1: FinBERT ----
+        finbert_score = 0.0
+        if finbert:
+            try:
+                # Max length is handled by the pipeline since we passed truncation=True
+                result = finbert(text_clean)[0]
+                label = result['label']
+                score = result['score']
+                if label == 'positive':
+                    finbert_score = score
+                elif label == 'negative':
+                    finbert_score = -score
+                else:
+                    finbert_score = 0.0
+            except Exception as e:
+                logger.error(f"FinBERT analysis failed: {e}")
+
+        # ---- Component 2: VADER ----
         vader_score = 0.0
-        if self.vader:
+        if self.vader and not finbert:
             vs = self.vader.polarity_scores(text_clean)
             vader_score = vs['compound']
         
-        # ---- Component 2: TextBlob ----
+        # ---- Component 3: TextBlob ----
         textblob_score = 0.0
-        if _HAS_TEXTBLOB:
+        if _HAS_TEXTBLOB and not finbert:
             blob = TextBlob(text_clean)
             textblob_score = blob.sentiment.polarity
         
-        # ---- Component 3: Domain-specific keyword scoring ----
+        # ---- Component 4: Domain-specific keyword scoring ----
         domain_score = 0.0
         pos_matches = len(self._pos_pattern.findall(text_clean))
         neg_matches = len(self._neg_pattern.findall(text_clean))
@@ -199,7 +250,10 @@ class SentimentAnalyzer:
             domain_score = (pos_matches - neg_matches) / total_matches
         
         # ---- Ensemble ----
-        if self.vader and _HAS_TEXTBLOB:
+        if finbert:
+            # FinBERT is highly accurate, give it main weight, slight boost from domain
+            compound = 0.8 * finbert_score + 0.2 * domain_score
+        elif self.vader and _HAS_TEXTBLOB:
             # Weighted average: VADER (0.4) + TextBlob (0.3) + Domain (0.3)
             compound = 0.4 * vader_score + 0.3 * textblob_score + 0.3 * domain_score
         elif _HAS_TEXTBLOB:
@@ -215,7 +269,9 @@ class SentimentAnalyzer:
         compound_boosted = max(min(compound_boosted, 1.0), -1.0)
         
         # Sentiment magnitude (how strong the opinion is, regardless of direction)
-        if self.vader:
+        if finbert:
+            magnitude = score if 'score' in locals() else 0.5
+        elif self.vader:
             magnitude = abs(vader_score)
         elif _HAS_TEXTBLOB:
             blob = TextBlob(text_clean)
@@ -229,6 +285,7 @@ class SentimentAnalyzer:
             'event_category': event_category,
             'event_weight': event_weight,
             'components': {
+                'finbert': round(finbert_score, 4),
                 'vader': round(vader_score, 4),
                 'textblob': round(textblob_score, 4),
                 'domain': round(domain_score, 4),
@@ -270,8 +327,8 @@ class FinnhubNewsProvider:
     Includes rate limiting and caching.
     """
     
-    # Hardcoded production key — used when env var is missing or empty
-    _DEFAULT_FINNHUB_KEY = 'd7ovmj9r01qr68pb6oegd7ovmj9r01qr68pb6of0'
+    # Fallback key from env — do NOT hardcode real keys in source
+    _DEFAULT_FINNHUB_KEY = ''
 
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or os.getenv('FINNHUB_KEY', '') or self._DEFAULT_FINNHUB_KEY
@@ -279,7 +336,7 @@ class FinnhubNewsProvider:
         self._cache: Dict[str, Tuple[float, List]] = {}
         self._cache_ttl = 1800  # 30 minutes
         self._last_request = 0
-        self._min_interval = 1.0  # 1 second between requests (rate limit)
+        self._min_interval = 0.15  # 0.15 second between requests (rate limit)
         self._disabled = False   # Auto-set on 403 to stop spamming invalid key
     
     def _rate_limit(self):
