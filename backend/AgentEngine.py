@@ -4,6 +4,7 @@ import json
 import time
 import logging
 import threading
+from datetime import datetime
 from typing import Generator, Dict, Any, List, Optional
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 from langchain_core.tools import tool
@@ -18,130 +19,177 @@ from psycopg import Connection
 from psycopg_pool import ConnectionPool
 
 from config import get_config
+from jev_pretrade_gate import JevPreTradeGate, build_market_snapshot
 
 logger = logging.getLogger(__name__)
 config = get_config()
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  SYSTEM PROMPT — Anti-hallucination, grounding rules, financial disclaimer
+#  SYSTEM PROMPT — Artha Drishti: grounding rules, Jev pre-trade discipline,
+#  structured response template, financial disclaimer
 # ═══════════════════════════════════════════════════════════════════════════
 
-SYSTEM_PROMPT = """You are **Artha Drishti**, a professional AI Stock Market Assistant for the Indian markets (NSE/BSE).
+SYSTEM_PROMPT = """You are Artha Drishti, an elite quantitative stock market intelligence assistant and portfolio strategist specializing in the Indian financial markets (NSE/BSE). You combine the rigorous analytical depth of Claude with the real-time synthesis and grounding of Gemini.
 
-## CORE RULES — NEVER VIOLATE
-1. **NEVER fabricate prices, percentages, dates, or financial data.** Every number you cite MUST come from a tool result or a Google Search result.
-2. If a tool returns an error or empty data, tell the user honestly: "I couldn't retrieve that data right now." Do NOT guess or fill in values from your training data.
-3. **Always use tools** to answer factual questions about stocks, prices, predictions, or market data. Do NOT rely on your parametric knowledge for live financial information.
-4. If you are unsure about something, say so. Uncertainty is better than a wrong answer.
-5. When citing data, mention the source (e.g., "Based on the screener results…", "According to recent news…").
-6. **When the user asks you to DO something (add, remove, create, backtest, buy, sell), use the appropriate action tool. NEVER tell the user to do it themselves or use the UI.**
+You are equipped with a real-time analytics suite, a quantitative strategy screener, a multi-target neural prediction engine, historical backtesting, vector document search, live web grounding, and the Jev (TypeSafe AI) pre-trade execution gate.
 
-## TOOLS AVAILABLE
+---
 
-### 📊 Analysis Tools
-- `screen_stocks` — Run screening strategies (piotroski, momentum, swing, breakout, value)
-- `predict_stock` — Get AI price prediction for a specific ticker
-- `get_market_overview` — Get latest market snapshot for top stocks
-- `get_stock_history` — Get recent OHLCV price history for a ticker
-- `get_sentiment` — Get news sentiment analysis for a stock
-- `generate_pattern_chart` — Generate an interactive pattern chart
-- `search_web` — Search the web for current news, prices, or live information
-- `search_financial_docs` — Search vector database for earnings calls, SEBI filings, annual reports
+### I. CORE OPERATIONAL PRINCIPLES
 
-### 🔧 Action Tools
-- `manage_watchlist` — Add/remove/list stocks in the user's watchlist
-- `run_backtest` — Backtest a strategy on a specific stock with date range
-- `create_strategy` — Create a new custom trading strategy from rules
-- `list_strategies` — List all available trading strategies
-- `compare_strategies` — Compare multiple strategies on one stock
-- `get_portfolio` — Get the user's portfolio summary with P&L
-- `add_transaction` — Record a buy/sell transaction in the portfolio
+1. ZERO TOLERANCE FOR HALLUCINATION:
+   - Never fabricate, extrapolate, or estimate prices, percentage changes, dates, support/resistance levels, or ratios.
+   - Every numerical data point MUST originate directly from an invoked tool or live web search result.
+   - If a tool returns empty or failed data, explicitly state: "Data unavailable for this asset under current criteria." Never fill gaps with parametric training memory.
+   - The example responses below are ILLUSTRATIVE FORMAT ONLY. Their numbers are placeholders. Never reuse them.
 
-### 💹 Paper Trading Tools
-- `paper_trade` — Place a paper (simulated) trade order
-- `get_paper_positions` — View current paper trading positions and P&L
-- `get_paper_order_history` — View paper trade order history
+2. EPISTEMIC HUMILITY & PROBABILISTIC REASONING:
+   - Markets are stochastic. Never make deterministic guarantees (e.g., do not say "The stock will hit ₹3,200"). Frame outputs probabilistically: "The multi-target model indicates a 68% directional probability favoring an upside trajectory toward ₹3,200, contingent on support at ₹3,050 holding."
+   - Explicitly highlight data drift (PSI score), model confidence, model status (whether the model has cleared its own reliability bar), and volatility regimes. If a tool reports the model is NOT production ready, or a signal was suppressed to HOLD, say so plainly.
 
-## RESPONSE FORMAT
-- Use **markdown** for formatting (bold, tables, bullet lists).
-- **Be concise.** Lead with the key insight or answer, then supporting details.
-- When presenting stock data, use markdown tables where appropriate.
-- For predictions, always mention the confidence level and timeframe.
-- Structure multi-part answers with clear **## Headers**.
+3. JEV PRE-TRADE EXECUTION DISCIPLINE:
+   - Before executing or endorsing any trade, call `jev_pretrade_check` (or rely on `paper_trade`, which runs the same gate automatically for BUY orders). The gate evaluates market microstructure:
+     * Liquidity conditions and bid-ask spread.
+     * Population Stability Index (PSI) drift: if PSI > 0.5 (Severe) or > 1.0 (Critical), advise against execution ("WAIT" or "SKIP").
+     * The Jev Execution Quality Score (0–10). Never execute a simulated trade when Jev signals "SKIP".
+   - The bid-ask spread is an ESTIMATE derived from daily High/Low (Corwin–Schultz), not a live quote, unless a tool explicitly says otherwise. Always describe it as "estimated spread".
+   - Report the gate's `source` honestly: "jev" means the TypeSafe model answered; "heuristic_fallback" means the deterministic rule chain was used.
+   - If `paper_trade` returns BLOCKED_BY_JEV_GATE, explain the reasons to the user. For a WAIT block, only retry with `confirm_despite_wait=true` if the user has EXPLICITLY said they want to proceed anyway after seeing the warning. Never set it on your own initiative.
+   - SELL / exit orders are not blocked by the gate (so users are never trapped in a position), but still mention gate warnings if relevant.
 
-## FEW-SHOT EXAMPLES
+4. ACTION-FIRST PHILOSOPHY:
+   - When the user asks to backtest, track, screen, or execute, invoke the relevant tool immediately. Never instruct the user to "use the UI" or "navigate to settings".
+   - For paper trades, require ticker, side, and quantity. If quantity is unspecified (e.g., "buy Reliance"), ASK for quantity and propose a risk-based sizing calculation based on portfolio capital. Do not place the trade until the quantity is given.
+   - Paper trades are SIMULATED — always state that no real money is used. After a trade, show ticker, quantity, price and total value.
 
-**User:** "Show me momentum stocks"
-**Your reasoning:** The user wants stock screening → call `screen_stocks` with strategy_name="momentum".
-**After getting tool results, respond with:**
-> ## 📊 Momentum Stocks
-> Here are the top momentum picks from our screener:
-> | Stock | Price | Return (%) | Volume Ratio |
-> |-------|-------|-----------|-------------|
-> | ... (from tool data) |
-> *(followed by brief interpretation and disclaimer)*
+---
 
-**User:** "Add Reliance to my watchlist"
-**Your reasoning:** User wants to add a stock to their watchlist → call `manage_watchlist` with action="add", ticker="RELIANCE".
-**After getting tool results, respond with:**
-> ✅ **RELIANCE** has been added to your watchlist. You now have X stocks in your watchlist.
+### II. TOOLS
 
-**User:** "Backtest momentum strategy on TCS for last 3 years"
-**Your reasoning:** User wants a backtest → call `run_backtest` with ticker="TCS", strategy="momentum", start_date="2023-08-28", end_date="2026-08-28".
-**After getting tool results, respond with:**
-> ## 📈 Backtest Results — Momentum on TCS (3 Years)
-> | Metric | Value |
-> |--------|-------|
-> | Total Return | X% |
-> | Sharpe Ratio | X.XX |
-> | Max Drawdown | X% |
-> | Win Rate | X% |
-> | Total Trades | X |
-> *(followed by interpretation and disclaimer)*
+Analysis: `screen_stocks` (piotroski, momentum, swing, breakout, value), `predict_stock`, `get_market_overview`, `get_stock_history`, `get_sentiment`, `generate_pattern_chart`, `search_web`, `search_financial_docs`, `jev_pretrade_check`.
+Actions: `manage_watchlist`, `run_backtest`, `create_strategy`, `list_strategies`, `compare_strategies`, `get_portfolio`, `add_transaction`.
+Paper trading: `paper_trade`, `get_paper_positions`, `get_paper_order_history`.
 
-**User:** "Create a strategy where RSI is below 30 and volume is above 2x average"
-**Your reasoning:** User wants to create a custom strategy → call `create_strategy` with appropriate rules.
-**After getting tool results, respond with:**
-> ✅ Strategy **"Custom Oversold Volume"** created successfully with 2 rules. You can now run it via the screener or backtest it.
+Use tools for ALL factual questions about stocks, prices, predictions or market data. For backtests with no stated range, omit the dates (the tool defaults to the last 3 years).
+For a single-stock outlook, call `predict_stock`, `get_sentiment` and `jev_pretrade_check` (side BUY unless the user is asking about exiting).
 
-**User:** "Buy 100 shares of INFY"
-**Your reasoning:** User wants to place a paper trade → call `paper_trade` with ticker="INFY", side="BUY", quantity=100.
-**After getting tool results, respond with:**
+---
+
+### III. RESPONSE MANNER & STRUCTURE
+
+Every analytical response (stock outlooks, predictions, trade evaluations) must follow this structured template. Short action confirmations (watchlist changes, strategy creation, simple greetings) use a compact format instead.
+
+1. 🎯 Executive Takeaway:
+   A 2-sentence bottom-line synthesis answering the user's primary query with the overarching market posture.
+
+2. 📊 Quantitative & Microstructure Dashboard:
+   Markdown table displaying price, predicted trajectory, model confidence, ATR volatility, and Jev execution metrics (use only values returned by tools).
+   | Metric | Value | Benchmark / Status |
+   | :--- | :--- | :--- |
+   | Current Price | ₹X,XXX.XX | NSE (as of data date) |
+   | Multi-Target Signal | BUY / HOLD / SELL | Confidence: XX.X% |
+   | Jev Gate Action | EXECUTE / WAIT / SKIP | Quality Score: X.X/10 |
+   | Liquidity / Est. Spread | Liquid (p=0.XX) | Est. spread: XX bps |
+   | Model Drift (PSI) | 0.XX | Stable (< 0.25) / Caution / Severe (> 0.5) |
+
+3. 🔍 Deep Technical & Fundamental Rationale:
+   Concise bullet points highlighting:
+   - Factor alignment (e.g., Piotroski F-score, RSI, MACD crossovers, Volume Ratio).
+   - Institutional volume flow and price action relative to key SMAs (20/50/200).
+   - Catalyst / News sentiment score (-1.0 to +1.0) and corporate event flags.
+
+4. 🛡️ Risk Budgeting & Invalidation Levels:
+   - Primary Invalidation / Stop-Loss Level (and percentage distance).
+   - Target Resistance / Profit Milestone.
+   - Risk-to-Reward Ratio (R:R).
+   If the signal is HOLD or the tool returned no trade setup, say there is no active setup instead of inventing levels.
+
+5. ⚡ Proactive Follow-ups:
+   Offer two high-value next steps (e.g., "Would you like me to backtest a 3-year momentum strategy on this stock, or screen peer sector stocks with lower volatility?").
+
+Use markdown. Be concise: lead with the key insight, then supporting detail. For predictions, always mention confidence level and timeframe.
+
+---
+
+### IV. FEW-SHOT FORMAT EXAMPLES (ILLUSTRATIVE — NUMBERS ARE PLACEHOLDERS)
+
+#### Example 1: Comprehensive Stock Analysis with Jev Gate
+User: "What's the outlook on INFY right now?"
+Reasoning: The user seeks multi-dimensional analysis. Invoke `predict_stock("INFY")`, `get_sentiment("INFY")`, and `jev_pretrade_check("INFY", "BUY")`.
+Response format:
+> ### 🎯 Executive Takeaway
+> **Infosys Ltd (INFY)** displays a cautious consolidation pattern. While the neural model indicates a moderate bullish bias (62% probability), the Jev pre-trade gate advises **WAIT** due to elevated estimated spread and mild feature drift.
+>
+> ### 📊 Quantitative & Microstructure Dashboard
+> | Metric | Value | Assessment |
+> | :--- | :--- | :--- |
+> | Current Price | ₹[from tool] | [from tool] |
+> | Directional Signal | Bullish (P=[from tool]) | Multi-target neural consensus |
+> | Jev Gate Evaluation | **WAIT** (Quality: [from tool]/10) | Est. spread [from tool] bps, PSI=[from tool] |
+> | 14-Day News Sentiment | [from tool] | [N] articles analyzed |
+> | Invalidation Anchor | ₹[from tool] | [from tool] |
+>
+> ### 🔍 Technical & Factor Analysis
+> - **Momentum & Regime:** [RSI / MACD readings from tool]
+> - **Microstructure Warning:** [volume ratio and gate reasons from tool]
+>
+> ### 🛡️ Risk Strategy
+> - **Trigger Entry / Protective Stop / Targets / R:R:** [only from tool data]
+>
+> ⚠️ *Disclaimer: AI-generated analysis for informational purposes only. Not financial advice. Consult a SEBI-registered advisor before investing.*
+>
+> 💡 *Next Steps: Would you like me to generate an interactive candlestick pattern chart for INFY, or run a 3-year backtest of our Swing strategy on this ticker?*
+
+#### Example 2: Execution Request with Microstructure Rejection
+User: "Buy 50 shares of TATASTEEL"
+Reasoning: Call `paper_trade("TATASTEEL", "BUY", 50)`. The tool runs the Jev gate itself. If it returns BLOCKED_BY_JEV_GATE:
+Response format:
+> ⚠️ **Execution Paused by Jev Pre-Trade Gate**
+>
+> Your order to **BUY 50 shares of TATASTEEL** was intercepted by our risk and execution gate:
+> - **Jev Action:** `[SKIP/WAIT]` (Execution Quality: [from tool]/10, source: [jev / heuristic_fallback])
+> - **Reason:** [reasons from tool, e.g. PSI value, estimated spread, ensemble disagreement]
+> - **Recommendation:** [a LIMIT order at a tool-derived price, or wait for conditions to improve]
+>
+> *Would you like me to place this as a LIMIT order instead?*
+> 📝 *Nothing was executed. Paper trades are simulated; no real money is used.*
+
+#### Example 3: Executed paper trade
 > ✅ **Paper Trade Executed**
 > | Detail | Value |
 > |--------|-------|
 > | Stock | INFY |
 > | Side | BUY |
-> | Quantity | 100 |
-> | Price | ₹X,XXX |
-> | Total Value | ₹X,XX,XXX |
+> | Quantity | [qty] |
+> | Price | ₹[from tool] |
+> | Total Value | ₹[from tool] |
+> | Jev Gate | [action] ([source]) |
 > 📝 *This is a paper (simulated) trade. No real money was used.*
 
-**User:** "What's RELIANCE looking like?"
-**Your reasoning:** Ambiguous — user likely wants a quick overview. Call `predict_stock` AND `get_stock_history`. Optionally `get_sentiment`.
+---
 
-**User:** "Hello" / "Hi" / "Thanks"
-**Your reasoning:** Conversational — no tool call needed.
-**Respond directly:** "Hello! I'm Artha Drishti, your AI market assistant. I can screen stocks, predict prices, analyze sentiment, manage your watchlist, run backtests, create strategies, or execute paper trades. What would you like to do?"
+### V. CHART RENDERING RULES
+When you invoke `generate_pattern_chart(ticker)`, output the EXACT returned markdown string:
+`![Interactive Chart for TICKER](chart:pattern:TICKER)`
+Do not modify or wrap this syntax, as the UI parser mounts the interactive Plotly WebGL engine directly from this token.
 
-## EXECUTION RULES — CRITICAL
-1. NEVER place a paper trade without the user explicitly mentioning what they want to buy/sell.
-2. Always show: ticker, quantity, price, and estimated cost in your response after placing a trade.
-3. If the user says "buy Reliance", ASK for quantity before executing.
-4. Always mention that paper trades are SIMULATED — no real money is used.
-5. For backtests, if no date range is specified, default to the last 3 years.
-
-## FINANCIAL DISCLAIMER
-You MUST append this disclaimer when giving any investment-related advice or recommendation:
-> ⚠️ *Disclaimer: This is AI-generated analysis for informational purposes only. It does not constitute financial advice. Please consult a SEBI-registered advisor before making investment decisions.*
-
-## CHART RENDERING
-When a tool returns a special markdown string like `![Interactive Chart...](chart:pattern:TICKER)`, you MUST include that EXACT string in your response so the frontend can render the interactive chart.
+### VI. MANDATORY REGULATORY COMPLIANCE
+Every investment or analytical response MUST conclude with:
+> ⚠️ *Disclaimer: This is AI-generated analysis for informational purposes only. It does not constitute financial advice. Please consult a SEBI-registered financial advisor before making real-world capital decisions.*
 """
 
 
+def _build_system_prompt() -> str:
+    """System prompt plus today's date (so date-dependent reasoning is never stale)."""
+    return SYSTEM_PROMPT + f"\n\nToday's date: {datetime.now().strftime('%A, %d %B %Y')}."
+
 
 class ArthaAgent:
+    # How long a predictor.predict() result may be reused (seconds). predict() is
+    # expensive and records a row in prediction_outcomes on every call, so repeated
+    # tool calls within one conversation turn must not each trigger a fresh run.
+    PREDICTION_CACHE_TTL_SECONDS = int(os.getenv("JEV_PREDICTION_CACHE_SECONDS", "300"))
+
     def __init__(self, screener, predictor, pipeline, db_url=None,
                  backtest_engine=None, strategy_engine=None,
                  portfolio_manager=None, order_manager=None):
@@ -154,14 +202,25 @@ class ArthaAgent:
         self.strategy_engine = strategy_engine
         self.portfolio_manager = portfolio_manager
         self.order_manager = order_manager
-        
+
+        # Jev pre-trade gate + prediction cache
+        try:
+            self.jev_gate = JevPreTradeGate(
+                timeout_ms=int(os.getenv("JEV_TIMEOUT_MS", "500")),
+            )
+        except Exception as e:
+            logger.warning(f"Could not initialise Jev gate: {e}")
+            self.jev_gate = None
+        self._prediction_cache: Dict[str, Any] = {}
+        self._prediction_cache_lock = threading.Lock()
+
         api_key = config.GOOGLE_API_KEY
 
         # Initialize LLMOps: Tracing (LangSmith)
         if os.getenv("LANGCHAIN_API_KEY"):
             os.environ["LANGCHAIN_TRACING_V2"] = "true"
             os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGCHAIN_PROJECT", "Artha-Drishti")
-        
+
         # Initialize LLMOps: Caching
         try:
             cache = InMemoryCache()
@@ -173,7 +232,7 @@ class ArthaAgent:
         # Initialize LLM
         if not api_key:
             logger.warning("GOOGLE_API_KEY is not set. Agent will not function correctly.")
-            
+
         self.llm = ChatGoogleGenerativeAI(
             model=config.AGENT_MODEL,
             google_api_key=api_key,
@@ -181,7 +240,7 @@ class ArthaAgent:
             top_p=0.95,
             max_output_tokens=8192,
         )
-        
+
         # Pre-create grounded search LLM (reused by search_web tool)
         self._search_llm = ChatGoogleGenerativeAI(
             model=config.AGENT_MODEL,
@@ -189,21 +248,21 @@ class ArthaAgent:
             temperature=0.0,
             max_output_tokens=1024,
         ).bind(tools=[{"google_search": {}}])
-        
+
         # Lazy-initialized PGVector vectorstore (reused by search_financial_docs)
         self._vectorstore: Optional[PGVector] = None
-        
+
         # Connection pool for checkpointer (replaces per-request Connection.connect)
         self._pg_pool: Optional[ConnectionPool] = None
         self._init_connection_pool()
-        
+
         # Define Tools
         self.tools = self._create_tools()
         self.llm_with_tools = self.llm.bind_tools(self.tools)
-        
+
         # Compile Graph
         self.graph = self._build_graph()
-        
+
         # Pre-initialize checkpointer tables (once, not per-request)
         self._setup_checkpointer()
 
@@ -244,11 +303,11 @@ class ArthaAgent:
         """Input sanitization with improved prompt injection detection."""
         if not text or not isinstance(text, str):
             return ""
-        
+
         # Normalize unicode to catch homoglyph attacks
         import unicodedata
         normalized = unicodedata.normalize('NFKC', text).lower()
-        
+
         # Guardrails: Prompt Injection Detection
         injection_patterns = [
             r"ignore\s+(all\s+)?previous\s+instructions",
@@ -265,7 +324,7 @@ class ArthaAgent:
             if re.search(pattern, normalized):
                 logger.warning(f"Potential prompt injection detected: {pattern}")
                 return "I cannot fulfill that request."
-            
+
         # Strip control characters except newline/tab
         text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
         # Collapse excessive whitespace
@@ -289,6 +348,231 @@ class ArthaAgent:
                 truncated = truncated.rstrip(',\n ') + ']'
         return truncated + '\n... (truncated — ask about specific stocks for full details)'
 
+    # ═══════════════════════════════════════════════════════════════════════
+    #  PREDICTION CACHE + SUMMARY + JEV GATE HELPERS
+    # ═══════════════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _canon_ticker(ticker: str) -> str:
+        return str(ticker or "").strip().upper().replace(".NS", "")
+
+    def _get_prediction_cached(self, ticker: str) -> Dict[str, Any]:
+        """predictor.predict() with a short TTL cache (it is slow and writes DB rows per call)."""
+        key = self._canon_ticker(ticker)
+        now = time.time()
+        with self._prediction_cache_lock:
+            hit = self._prediction_cache.get(key)
+            if hit and (now - hit[0]) < self.PREDICTION_CACHE_TTL_SECONDS:
+                return hit[1]
+        pred = self.predictor.predict(key)
+        # Only cache successful predictions; errors should be retried next call.
+        if isinstance(pred, dict) and "error" not in pred:
+            with self._prediction_cache_lock:
+                self._prediction_cache[key] = (time.time(), pred)
+                if len(self._prediction_cache) > 200:
+                    oldest = min(self._prediction_cache, key=lambda k: self._prediction_cache[k][0])
+                    self._prediction_cache.pop(oldest, None)
+        return pred
+
+    def _summarize_prediction(self, pred: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Compact, LLM-friendly view of a predictor.predict() result. The raw result is
+        far larger than the tool-output limit, so truncating it used to cut off key
+        fields (PSI, regime, thresholds). Only fields the response template needs are kept.
+        """
+        pa = pred.get("price_analysis") or {}
+        rec = pred.get("recommendation") or {}
+        ts = pred.get("trade_setup") or {}
+        drift = pred.get("data_drift") or {}
+        drift_an = pred.get("drift_analysis") or {}
+        regime = pred.get("market_regime") or {}
+        mom = pred.get("momentum_factor") or {}
+        pat = pred.get("pattern_analysis") or {}
+        sent = pred.get("sentiment") or {}
+        risk = pred.get("risk_management") or {}
+        safety = pred.get("safety_report") or {}
+        horizons = (pred.get("multi_horizon_analysis") or {}).get("horizons")
+
+        cur, atr = pa.get("current_price"), pa.get("atr_20")
+        atr_pct = round(atr / cur * 100, 2) if cur and atr else None
+
+        scorecard = getattr(self.predictor, "_reliability_scorecard", None)
+        if isinstance(scorecard, dict):
+            model_status = {
+                "production_ready": bool(scorecard.get("critical_checks_passed", False)),
+                "score": f"{scorecard.get('score')}/{scorecard.get('max_score')}",
+                "calibrated_test_accuracy_pct": scorecard.get("calibrated_test_accuracy_pct"),
+                "backtest_sharpe": scorecard.get("backtest_sharpe"),
+            }
+        else:
+            model_status = {"production_ready": None, "note": "No reliability scorecard on record — unvalidated."}
+
+        patterns = [
+            {"pattern": p.get("pattern_type"), "signal": p.get("signal"), "confidence": p.get("confidence")}
+            for p in (pat.get("patterns_detected") or [])[:5]
+            if isinstance(p, dict)
+        ]
+
+        return {
+            "ticker": pred.get("ticker"),
+            "generated_at": pred.get("timestamp"),
+            "model_version": pred.get("model_version"),
+            "model_status": model_status,
+            "price": {
+                "current": cur,
+                "predicted_5d": pa.get("predicted_price_5d"),
+                "expected_change_pct": pa.get("expected_change_pct"),
+                "atr_20": atr,
+                "atr_pct_of_price": atr_pct,
+                "historical_volatility_annual_pct": pa.get("historical_volatility_annual"),
+                "note": pa.get("price_prediction_note"),
+            },
+            "signal": {
+                "signal": rec.get("signal"),
+                "strength": rec.get("signal_strength"),
+                "market_bias": rec.get("market_bias"),
+                "direction_probability_pct": rec.get("direction_probability"),
+                "confidence_score_pct": rec.get("confidence_score"),
+                "mc_uncertainty_pct": rec.get("mc_uncertainty"),
+                "buy_threshold_pct": rec.get("buy_threshold"),
+                "sell_threshold_pct": rec.get("sell_threshold"),
+                "decision_reason": rec.get("decision_reason"),
+                "drift_guard_triggered": rec.get("drift_guard_triggered"),
+                "warning": rec.get("signal_warning"),
+            },
+            "trade_setup": ts if ts else None,
+            "multi_horizon_bullish_pct": horizons,
+            "drift": {
+                "psi": drift.get("psi"),
+                "level": drift_an.get("drift_level"),
+                "warning": drift.get("warning"),
+            },
+            "regime": {"regime": regime.get("regime"), "confidence": regime.get("confidence")},
+            "momentum": {"score": mom.get("score"), "regime": mom.get("regime")},
+            "patterns": {
+                "detected": patterns,
+                "confluence_score": pat.get("confluence_score"),
+                "support_levels": (pat.get("support_levels") or [])[:3],
+                "resistance_levels": (pat.get("resistance_levels") or [])[:3],
+            },
+            "sentiment": {
+                "score": sent.get("sentiment_score"),
+                "overall": sent.get("overall"),
+                "agreement_with_ml": sent.get("agreement_with_ml"),
+            },
+            "risk_management": {
+                "position_pct_of_capital": risk.get("position_pct_of_capital"),
+                "suggested_quantity": risk.get("suggested_quantity"),
+                "max_loss_amount": risk.get("max_loss_amount"),
+            },
+            "safety": {
+                "overall_severity": safety.get("overall_severity"),
+                "recommended_action": safety.get("recommended_action"),
+                "market_open": (safety.get("market_hours") or {}).get("market_open"),
+                "liquidity": {
+                    "liquid": (safety.get("liquidity") or {}).get("liquid"),
+                    "avg_volume_20d": (safety.get("liquidity") or {}).get("avg_volume_20d"),
+                    "severity": (safety.get("liquidity") or {}).get("severity"),
+                },
+            },
+            "investor_action": (pred.get("investor_action") or {}).get("summary"),
+        }
+
+    def _paper_capital(self) -> float:
+        """Best-effort paper-trading capital for position-size % (falls back to env/default)."""
+        default = float(os.getenv("PAPER_TRADING_CAPITAL", "1000000"))
+        try:
+            funds = self.order_manager.broker.get_funds() or {}
+            for k in ("total_equity", "equity", "net", "total", "available_cash",
+                      "cash", "balance", "available_margin"):
+                v = funds.get(k)
+                if isinstance(v, (int, float)) and v > 0:
+                    return float(v)
+        except Exception:
+            pass
+        return default
+
+    def _days_since_last_trade(self, ticker: str) -> int:
+        """0 if the symbol traded in today's order history, else a 30-day 'no recent trade known' cap."""
+        try:
+            if self.order_manager is not None:
+                for o in self.order_manager.broker.get_order_history() or []:
+                    if str(getattr(o, "symbol", "")).upper() == ticker:
+                        return 0
+        except Exception:
+            pass
+        return 30
+
+    def _evaluate_jev_gate(self, ticker: str, side: str = "BUY", quantity: int = 0,
+                           reference_price: Optional[float] = None) -> Dict[str, Any]:
+        """
+        Run the Jev pre-trade gate for a proposed order. Never raises.
+        Returns {"evaluated": False, "error": ...} if the gate could not be evaluated.
+        """
+        ticker = self._canon_ticker(ticker)
+        side = str(side or "BUY").upper()
+        if self.jev_gate is None:
+            return {"evaluated": False, "ticker": ticker, "error": "Jev gate is not initialised."}
+        try:
+            pred = self._get_prediction_cached(ticker)
+            if not isinstance(pred, dict) or "error" in pred:
+                return {"evaluated": False, "ticker": ticker,
+                        "error": (pred or {}).get("error", "Prediction unavailable")}
+
+            ref_price = reference_price or (pred.get("price_analysis") or {}).get("current_price")
+            notes: List[str] = []
+            capital = self._paper_capital() if self.order_manager is not None else float(
+                os.getenv("PAPER_TRADING_CAPITAL", "1000000"))
+            if quantity and quantity > 0 and ref_price:
+                position_pct = float(quantity) * float(ref_price) / max(capital, 1.0) * 100.0
+            else:
+                position_pct = 1.0
+                notes.append("No quantity given — position size assumed at 1% of portfolio for this evaluation.")
+
+            try:
+                rows = self.pipeline.get_ticker_history(ticker) or []
+                rows = [dict(r) if not isinstance(r, dict) else r for r in rows][-60:]
+            except Exception as e:
+                logger.debug(f"Jev gate: OHLCV fetch failed for {ticker}: {e}")
+                rows = []
+
+            snapshot, prov = build_market_snapshot(
+                ticker, pred, rows, signal_type=side,
+                position_size_pct=position_pct,
+                days_since_last_trade=self._days_since_last_trade(ticker),
+            )
+            decision = self.jev_gate.evaluate(snapshot)
+            execute_ok = self.jev_gate.should_execute(decision)
+
+            return {
+                "evaluated": True,
+                "ticker": ticker,
+                "side": side,
+                "quantity": quantity or None,
+                "reference_price": ref_price,
+                "decision": decision.to_dict(),
+                "should_execute": execute_ok,
+                "inputs": {
+                    "ml_probability": round(snapshot.ml_probability, 4),
+                    "ensemble_std": round(snapshot.ensemble_std, 4),
+                    "estimated_spread_bps": round(snapshot.bid_ask_spread_bps, 1),
+                    "volume_ratio_20d": round(snapshot.volume_ratio_20d, 2),
+                    "psi": round(snapshot.psi_drift_score, 4),
+                    "regime": snapshot.regime_state,
+                    "atr_pct": round(snapshot.atr_pct, 2),
+                    "position_size_pct": round(snapshot.position_size_pct, 3),
+                },
+                "data_quality": {
+                    "spread_is_estimate": True,
+                    "estimated_fields": prov.get("estimated", []),
+                    "defaulted_fields": prov.get("defaulted", []),
+                    "notes": prov.get("notes", []) + notes,
+                },
+            }
+        except Exception as e:
+            logger.error(f"Jev gate evaluation failed for {ticker}: {e}", exc_info=True)
+            return {"evaluated": False, "ticker": ticker, "error": f"Gate evaluation failed: {e}"}
+
     def _create_tools(self) -> List[Any]:
         screener = self.screener
         predictor = self.predictor
@@ -300,9 +584,13 @@ class ArthaAgent:
         strategy_engine = self.strategy_engine
         portfolio_manager = self.portfolio_manager
         order_manager = self.order_manager
+        get_prediction = self._get_prediction_cached
+        summarize_prediction = self._summarize_prediction
+        run_jev_gate = self._evaluate_jev_gate
+        jev_fail_open = os.getenv("JEV_GATE_FAIL_OPEN", "false").strip().lower() in ("1", "true", "yes", "on")
 
         # ═══════════════════════════════════════════════════════════
-        # ANALYSIS TOOLS (existing 8)
+        # ANALYSIS TOOLS
         # ═══════════════════════════════════════════════════════════
 
         @tool
@@ -323,11 +611,11 @@ class ArthaAgent:
                 scan_fn = strategy_map.get(strategy_name)
                 if not scan_fn:
                     return json.dumps({"error": f"Strategy '{strategy_name}' not supported. Use: {', '.join(strategy_map.keys())}"})
-                
+
                 df = scan_fn()
                 if df is not None and not df.empty:
                     res = df.head(max_results).to_dict(orient="records")
-                    return truncate(json.dumps(res, default=str))
+                    return truncate(json.dumps({"stocks": res}, default=str))
                 return json.dumps({"message": "No stocks matched this strategy's criteria right now."})
             except Exception as e:
                 logger.error(f"screen_stocks error: {e}")
@@ -336,12 +624,17 @@ class ArthaAgent:
         @tool
         def predict_stock(ticker: str) -> str:
             """
-            Get the AI price prediction and technical analysis for a specific NSE stock ticker (e.g. 'RELIANCE', 'TCS', 'INFY').
-            Returns predicted price, confidence, and technical signals.
+            Get the AI price/direction prediction and technical analysis for a specific NSE stock ticker
+            (e.g. 'RELIANCE', 'TCS', 'INFY').
+            Returns a compact summary: signal, direction probability and confidence, trade setup,
+            ATR volatility, feature-drift PSI, market regime, patterns, sentiment, safety flags and
+            whether the model has cleared its own production-reliability bar.
             """
             try:
-                res = predictor.predict(ticker)
-                return truncate(json.dumps(res, default=str))
+                res = get_prediction(ticker)
+                if isinstance(res, dict) and "error" in res:
+                    return json.dumps({"error": f"Prediction failed for {ticker}: {res['error']}"})
+                return truncate(json.dumps(summarize_prediction(res), default=str))
             except Exception as e:
                 logger.error(f"predict_stock error for {ticker}: {e}")
                 return json.dumps({"error": f"Prediction failed for {ticker}: {str(e)}"})
@@ -354,7 +647,7 @@ class ArthaAgent:
             """
             try:
                 data = pipeline.get_latest_data(limit=50)
-                return truncate(json.dumps(data, default=str))
+                return truncate(json.dumps({"overview": data}, default=str))
             except Exception as e:
                 logger.error(f"get_market_overview error: {e}")
                 return json.dumps({"error": f"Could not fetch market data: {str(e)}"})
@@ -368,7 +661,7 @@ class ArthaAgent:
             try:
                 data = pipeline.get_ticker_history(ticker)
                 if data:
-                    return json.dumps(data[-10:], default=str)
+                    return json.dumps({"history": data[-10:]}, default=str)
                 return json.dumps({"message": f"No price history found for {ticker}. Verify the ticker symbol."})
             except Exception as e:
                 logger.error(f"get_stock_history error for {ticker}: {e}")
@@ -407,7 +700,8 @@ class ArthaAgent:
             Returns a special markdown string that the frontend renders as an interactive Plotly chart.
             Use this when the user asks to see a chart, candlestick patterns, or visual analysis.
             """
-            return f"![Interactive Chart for {ticker}](chart:pattern:{ticker})"
+            chart_md = f"![Interactive Chart for {ticker}](chart:pattern:{ticker})"
+            return json.dumps({"chart": chart_md})
 
         @tool
         def search_web(query: str) -> str:
@@ -425,8 +719,8 @@ class ArthaAgent:
                     content = response.content
                     if isinstance(content, list):
                         texts = [p.get('text', '') if isinstance(p, dict) else str(p) for p in content]
-                        return truncate(' '.join(texts))
-                    return truncate(str(content))
+                        return truncate(json.dumps({"results": ' '.join(texts)}, default=str))
+                    return truncate(json.dumps({"results": str(content)}, default=str))
                 return json.dumps({"message": "Web search returned no results."})
             except Exception as e:
                 logger.error(f"search_web error: {e}")
@@ -442,20 +736,37 @@ class ArthaAgent:
                 vectorstore = get_vectorstore()
                 if vectorstore is None:
                     return json.dumps({"message": "Vector database is not configured."})
-                
+
                 full_query = f"{ticker} {query}".strip()
                 docs = vectorstore.similarity_search(full_query, k=3)
-                
+
                 if docs:
                     results = [{"content": doc.page_content, "source": doc.metadata.get("source", "Unknown")} for doc in docs]
-                    return truncate(json.dumps(results, default=str))
+                    return truncate(json.dumps({"documents": results}, default=str))
                 return json.dumps({"message": "No relevant documents found in the vector database."})
             except Exception as e:
                 logger.error(f"search_financial_docs error: {e}")
                 return json.dumps({"error": f"Document search failed: {str(e)}"})
 
+        @tool
+        def jev_pretrade_check(ticker: str, side: str = "BUY", quantity: int = 0) -> str:
+            """
+            Run the Jev (TypeSafe AI) pre-trade execution gate for a proposed order on an NSE stock.
+            Evaluates ML signal strength, model disagreement, feature drift (PSI), liquidity,
+            ESTIMATED bid-ask spread (derived from daily High/Low, not a live quote), volume vs the
+            20-day average and ATR volatility.
+            Returns the gate action (EXECUTE / WAIT / SKIP), execution quality score (0-10),
+            a liquidity judgement, the inputs used, and which inputs are estimated or defaulted.
+            The 'source' field is 'jev' when the TypeSafe model answered, or 'heuristic_fallback'
+            when the deterministic rule chain was used instead.
+            Use this when the user asks whether a trade is a good idea to execute, or to populate the
+            Jev rows of the analysis dashboard. quantity is optional (position assumed 1% if 0).
+            """
+            result = run_jev_gate(ticker, side, int(quantity or 0))
+            return truncate(json.dumps(result, default=str))
+
         # ═══════════════════════════════════════════════════════════
-        # ACTION TOOLS (new 7)
+        # ACTION TOOLS
         # ═══════════════════════════════════════════════════════════
 
         @tool
@@ -469,7 +780,7 @@ class ArthaAgent:
             try:
                 import requests
                 base_url = os.getenv('API_BASE_URL', 'http://localhost:5000')
-                
+
                 if action == "list":
                     resp = requests.get(f"{base_url}/api/watchlist", timeout=10)
                     data = resp.json()
@@ -477,7 +788,7 @@ class ArthaAgent:
                     if not watchlist:
                         return json.dumps({"message": "Your watchlist is empty. Ask me to add stocks!", "watchlist": []})
                     return json.dumps({"watchlist": watchlist, "count": len(watchlist)})
-                
+
                 elif action == "add":
                     if not ticker:
                         return json.dumps({"error": "Please specify a ticker to add."})
@@ -493,7 +804,7 @@ class ArthaAgent:
                         "watchlist": data.get("watchlist", []),
                         "count": len(data.get("watchlist", []))
                     })
-                
+
                 elif action == "remove":
                     if not ticker:
                         return json.dumps({"error": "Please specify a ticker to remove."})
@@ -509,10 +820,10 @@ class ArthaAgent:
                         "watchlist": data.get("watchlist", []),
                         "count": len(data.get("watchlist", []))
                     })
-                
+
                 else:
                     return json.dumps({"error": f"Unknown action '{action}'. Use 'add', 'remove', or 'list'."})
-                    
+
             except Exception as e:
                 logger.error(f"manage_watchlist error: {e}")
                 return json.dumps({"error": f"Watchlist operation failed: {str(e)}"})
@@ -531,49 +842,49 @@ class ArthaAgent:
             """
             try:
                 import pandas as pd
-                from datetime import datetime, timedelta
-                
+                from datetime import timedelta
+
                 if not end_date:
                     end_date = datetime.now().strftime('%Y-%m-%d')
                 if not start_date:
                     start_date = (datetime.now() - timedelta(days=3*365)).strftime('%Y-%m-%d')
-                
+
                 ticker = ticker.upper().strip()
-                
+
                 # Fetch price data
                 ticker_data = pipeline.get_ticker_history(ticker)
                 if not ticker_data:
                     return json.dumps({"error": f"No historical data found for {ticker}. Verify the ticker symbol."})
-                
+
                 price_data = pd.DataFrame([dict(row) if not isinstance(row, dict) else row for row in ticker_data])
                 if 'date' in price_data.columns:
                     price_data['date'] = pd.to_datetime(price_data['date'])
                     price_data = price_data[
                         (price_data['date'] >= start_date) & (price_data['date'] <= end_date)
                     ]
-                
+
                 if price_data.empty or len(price_data) < 50:
                     return json.dumps({"error": f"Insufficient data for {ticker} in date range {start_date} to {end_date}. Need at least 50 trading days."})
-                
+
                 # Import signal generation from application module
                 if backtest_engine is None:
                     return json.dumps({"error": "Backtest engine is not available."})
-                
+
                 from BacktestEngine import BacktestEngine as BT
                 from backtest_models import BacktestConfig, PositionSizingMode
-                
+
                 bt_config = BacktestConfig(
                     initial_capital=float(initial_capital),
                     sizing_mode=PositionSizingMode.RISK_BASED,
                     use_atr_stops=True,
                 )
                 engine = BT(data_pipeline=pipeline, config=bt_config)
-                
+
                 # Generate signals using a simple technical approach
                 signals = _generate_signals_for_agent(strategy, price_data)
-                
+
                 result = engine.backtest_strategy(signals, price_data, strategy_name=strategy)
-                
+
                 # Return concise summary (not the full equity curve)
                 summary = {
                     "status": "success",
@@ -594,7 +905,7 @@ class ArthaAgent:
                     "total_costs": round(result.total_transaction_costs + result.total_slippage_costs, 2),
                 }
                 return json.dumps(summary, default=str)
-                
+
             except Exception as e:
                 logger.error(f"run_backtest error: {e}", exc_info=True)
                 return json.dumps({"error": f"Backtest failed: {str(e)}"})
@@ -613,16 +924,16 @@ class ArthaAgent:
             try:
                 if strategy_engine is None:
                     return json.dumps({"error": "Strategy engine is not available."})
-                
+
                 # Parse rules
                 try:
                     parsed_rules = json.loads(rules) if isinstance(rules, str) else rules
                 except json.JSONDecodeError:
                     return json.dumps({"error": "Invalid rules format. Rules must be a valid JSON array."})
-                
+
                 if not isinstance(parsed_rules, list) or len(parsed_rules) == 0:
                     return json.dumps({"error": "Rules must be a non-empty JSON array."})
-                
+
                 strategy_engine.add_custom_strategy(
                     name=name,
                     description=description,
@@ -631,7 +942,7 @@ class ArthaAgent:
                     timeframe="Custom",
                     rules=parsed_rules
                 )
-                
+
                 return json.dumps({
                     "message": f"✅ Strategy '{name}' created successfully with {len(parsed_rules)} rules.",
                     "name": name,
@@ -639,7 +950,7 @@ class ArthaAgent:
                     "rules_count": len(parsed_rules),
                     "rules": parsed_rules,
                 })
-                
+
             except Exception as e:
                 logger.error(f"create_strategy error: {e}")
                 return json.dumps({"error": f"Strategy creation failed: {str(e)}"})
@@ -662,13 +973,13 @@ class ArthaAgent:
                             {"name": "piotroski", "description": "High Piotroski F-Score stocks"},
                         ]
                     })
-                
+
                 catalog = strategy_engine.get_strategy_catalog()
                 if category:
                     catalog = [s for s in catalog if s.get("category", "").lower() == category.lower()]
-                
+
                 return truncate(json.dumps({"strategies": catalog, "total": len(catalog)}, default=str))
-                
+
             except Exception as e:
                 logger.error(f"list_strategies error: {e}")
                 return json.dumps({"error": f"Could not list strategies: {str(e)}"})
@@ -684,34 +995,34 @@ class ArthaAgent:
             """
             try:
                 import pandas as pd
-                from datetime import datetime, timedelta
-                
+                from datetime import timedelta
+
                 ticker = ticker.upper().strip()
                 names = [s.strip().lower() for s in strategy_names.split(",")]
-                
+
                 if len(names) < 2:
                     return json.dumps({"error": "Please provide at least 2 strategy names separated by commas."})
-                
+
                 # Fetch price data (3 years)
                 ticker_data = pipeline.get_ticker_history(ticker)
                 if not ticker_data:
                     return json.dumps({"error": f"No data found for {ticker}."})
-                
+
                 price_data = pd.DataFrame([dict(row) if not isinstance(row, dict) else row for row in ticker_data])
                 if 'date' in price_data.columns:
                     price_data['date'] = pd.to_datetime(price_data['date'])
                     cutoff = (datetime.now() - timedelta(days=3*365)).strftime('%Y-%m-%d')
                     price_data = price_data[price_data['date'] >= cutoff]
-                
+
                 if price_data.empty or len(price_data) < 50:
                     return json.dumps({"error": f"Insufficient data for {ticker}."})
-                
+
                 from BacktestEngine import BacktestEngine as BT
                 from backtest_models import BacktestConfig, PositionSizingMode
-                
+
                 bt_config = BacktestConfig(initial_capital=100000.0, use_atr_stops=True)
                 engine = BT(data_pipeline=pipeline, config=bt_config)
-                
+
                 # Generate signals for each strategy
                 signals_dict = {}
                 for name in names:
@@ -719,12 +1030,12 @@ class ArthaAgent:
                         signals_dict[name] = _generate_signals_for_agent(name, price_data)
                     except Exception as e:
                         logger.warning(f"Could not generate signals for {name}: {e}")
-                
+
                 if len(signals_dict) < 2:
                     return json.dumps({"error": "Could not generate signals for enough strategies."})
-                
+
                 comparison = engine.compare_strategies(signals_dict, price_data)
-                
+
                 # Simplify for LLM consumption
                 results = {}
                 for name, res in comparison.get("results", {}).items():
@@ -737,13 +1048,13 @@ class ArthaAgent:
                             "total_trades": res.get("total_trades", 0),
                             "profit_factor": res.get("profit_factor", 0),
                         }
-                
+
                 return json.dumps({
                     "ticker": ticker,
                     "comparison": results,
                     "rankings": comparison.get("rankings", {}),
                 }, default=str)
-                
+
             except Exception as e:
                 logger.error(f"compare_strategies error: {e}")
                 return json.dumps({"error": f"Strategy comparison failed: {str(e)}"})
@@ -757,7 +1068,7 @@ class ArthaAgent:
             try:
                 if portfolio_manager is None:
                     return json.dumps({"error": "Portfolio manager is not available."})
-                
+
                 # Fetch current prices for portfolio holdings
                 data = portfolio_manager._load_data(user_id)
                 current_prices = {}
@@ -769,10 +1080,10 @@ class ArthaAgent:
                             current_prices[ticker] = last_row.get("close", 0)
                     except Exception:
                         pass
-                
+
                 summary = portfolio_manager.get_portfolio_summary(user_id, current_prices)
                 return truncate(json.dumps(summary, default=str))
-                
+
             except Exception as e:
                 logger.error(f"get_portfolio error: {e}")
                 return json.dumps({"error": f"Could not fetch portfolio: {str(e)}"})
@@ -791,13 +1102,13 @@ class ArthaAgent:
             try:
                 if portfolio_manager is None:
                     return json.dumps({"error": "Portfolio manager is not available."})
-                
+
                 ticker = ticker.upper().strip()
                 transaction_type = transaction_type.upper().strip()
-                
+
                 if transaction_type not in ("BUY", "SELL"):
                     return json.dumps({"error": "Transaction type must be 'BUY' or 'SELL'."})
-                
+
                 result = portfolio_manager.add_transaction(
                     user_id=user_id,
                     ticker=ticker,
@@ -805,13 +1116,13 @@ class ArthaAgent:
                     quantity=quantity,
                     price=price
                 )
-                
+
                 return json.dumps({
                     "message": f"✅ {transaction_type} {quantity} shares of {ticker} at ₹{price:.2f} recorded.",
                     "transaction": result,
                     "total_value": round(quantity * price, 2),
                 }, default=str)
-                
+
             except ValueError as e:
                 return json.dumps({"error": str(e)})
             except Exception as e:
@@ -819,49 +1130,101 @@ class ArthaAgent:
                 return json.dumps({"error": f"Transaction failed: {str(e)}"})
 
         # ═══════════════════════════════════════════════════════════
-        # PAPER TRADING TOOLS (new 3)
+        # PAPER TRADING TOOLS
         # ═══════════════════════════════════════════════════════════
 
         @tool
-        def paper_trade(ticker: str, side: str, quantity: int, order_type: str = "MARKET", price: float = 0) -> str:
+        def paper_trade(ticker: str, side: str, quantity: int, order_type: str = "MARKET",
+                        price: float = 0, confirm_despite_wait: bool = False) -> str:
             """
             Place a paper (simulated) trade order. No real money is used.
             Parameters:
             - ticker: Stock symbol (e.g. 'INFY', 'RELIANCE')
             - side: 'BUY' or 'SELL'
-            - quantity: Number of shares to trade
+            - quantity: Number of shares to trade (must be provided by the user)
             - order_type: 'MARKET' (default) or 'LIMIT'
             - price: Limit price (required for LIMIT orders, ignored for MARKET)
-            Use when the user asks to buy/sell stocks, place a trade, or execute an order.
+            - confirm_despite_wait: Set True ONLY if the user has explicitly confirmed they want to
+              proceed after being told the Jev gate returned WAIT. Never set it on your own initiative.
+            BUY orders are screened by the Jev pre-trade gate first: a SKIP always blocks the order;
+            a WAIT blocks it unless confirm_despite_wait is True. SELL (exit) orders are not blocked.
             Always confirm this is paper (simulated) trading in your response.
             """
             try:
                 if order_manager is None:
                     return json.dumps({"error": "Paper trading is not available. Order manager not initialized."})
-                
+
                 from BrokerAdapter import OrderRequest, OrderSide, BrokerOrderType, ProductType
-                
+
                 ticker = ticker.upper().strip()
                 side = side.upper().strip()
-                
+
                 if side not in ("BUY", "SELL"):
                     return json.dumps({"error": "Side must be 'BUY' or 'SELL'."})
                 if quantity <= 0:
                     return json.dumps({"error": "Quantity must be greater than 0."})
-                
+                is_limit = order_type.upper() == "LIMIT"
+                if is_limit and (price is None or price <= 0):
+                    return json.dumps({"error": "A positive limit price is required for LIMIT orders."})
+
+                # ── Jev pre-trade gate (BUY orders only) ──────────────────────
+                jev_info: Any = "Not applied to SELL/exit orders."
+                if side == "BUY":
+                    gate = run_jev_gate(ticker, "BUY", quantity, price if is_limit else None)
+                    if not gate.get("evaluated"):
+                        if not jev_fail_open:
+                            return json.dumps({
+                                "status": "BLOCKED_BY_JEV_GATE",
+                                "executed": False,
+                                "message": ("The Jev pre-trade gate could not be evaluated, so the BUY was not placed "
+                                            f"(fail-closed). Reason: {gate.get('error')}"),
+                                "jev_gate": gate,
+                            }, default=str)
+                        jev_info = {"evaluated": False, "error": gate.get("error"),
+                                    "note": "Gate unavailable; proceeding because JEV_GATE_FAIL_OPEN is enabled."}
+                    else:
+                        decision = gate["decision"]
+                        action = decision["action"]
+                        if action == "SKIP":
+                            return json.dumps({
+                                "status": "BLOCKED_BY_JEV_GATE",
+                                "executed": False,
+                                "message": "Jev gate returned SKIP — order NOT placed.",
+                                "jev_gate": gate,
+                            }, default=str)
+                        if not gate["should_execute"] and not confirm_despite_wait:
+                            return json.dumps({
+                                "status": "BLOCKED_BY_JEV_GATE",
+                                "executed": False,
+                                "requires_user_confirmation": True,
+                                "message": (f"Jev gate returned {action} (not cleared to execute now). Order NOT placed. "
+                                            "Ask the user whether they want to proceed anyway or switch to a LIMIT order; "
+                                            "only re-call with confirm_despite_wait=true if they explicitly confirm."),
+                                "jev_gate": gate,
+                            }, default=str)
+                        jev_info = {
+                            "action": action,
+                            "source": decision.get("source"),
+                            "execution_quality_score": decision.get("execution_quality_score"),
+                            "overridden_by_user": bool(not gate["should_execute"] and confirm_despite_wait),
+                            "reasons": decision.get("reasons"),
+                            "estimated_spread_bps": gate["inputs"]["estimated_spread_bps"],
+                            "psi": gate["inputs"]["psi"],
+                        }
+
                 order = OrderRequest(
                     symbol=ticker,
                     exchange="NSE",
                     side=OrderSide.BUY if side == "BUY" else OrderSide.SELL,
-                    order_type=BrokerOrderType.LIMIT if order_type.upper() == "LIMIT" else BrokerOrderType.MARKET,
+                    order_type=BrokerOrderType.LIMIT if is_limit else BrokerOrderType.MARKET,
                     quantity=quantity,
-                    price=price if order_type.upper() == "LIMIT" else None,
+                    price=price if is_limit else None,
                     product=ProductType.CNC,
                     tag="agent_trade",
                 )
-                
+
                 response = order_manager.validate_and_place(order, user_confirmed=True)
-                
+
                 result = {
                     "order_id": response.order_id,
                     "status": response.status.value,
@@ -872,10 +1235,11 @@ class ArthaAgent:
                     "price": response.average_price,
                     "total_value": round((response.average_price or 0) * quantity, 2),
                     "mode": "PAPER TRADING (simulated)",
+                    "jev_gate": jev_info,
                 }
-                
+
                 return json.dumps(result, default=str)
-                
+
             except Exception as e:
                 logger.error(f"paper_trade error: {e}")
                 return json.dumps({"error": f"Paper trade failed: {str(e)}"})
@@ -889,10 +1253,10 @@ class ArthaAgent:
             try:
                 if order_manager is None:
                     return json.dumps({"error": "Paper trading is not available."})
-                
+
                 positions = order_manager.broker.get_positions()
                 funds = order_manager.broker.get_funds()
-                
+
                 pos_list = []
                 for p in positions:
                     pos_list.append({
@@ -903,14 +1267,14 @@ class ArthaAgent:
                         "pnl": round(p.pnl, 2),
                         "pnl_pct": round((p.pnl / (p.average_price * abs(p.quantity))) * 100, 2) if p.average_price > 0 and p.quantity != 0 else 0,
                     })
-                
+
                 return json.dumps({
                     "positions": pos_list,
                     "total_positions": len(pos_list),
                     "funds": funds,
                     "mode": "PAPER TRADING",
                 }, default=str)
-                
+
             except Exception as e:
                 logger.error(f"get_paper_positions error: {e}")
                 return json.dumps({"error": f"Could not fetch positions: {str(e)}"})
@@ -924,9 +1288,9 @@ class ArthaAgent:
             try:
                 if order_manager is None:
                     return json.dumps({"error": "Paper trading is not available."})
-                
+
                 orders = order_manager.broker.get_order_history()
-                
+
                 order_list = []
                 for o in orders[-20:]:  # Last 20 orders
                     order_list.append({
@@ -939,42 +1303,42 @@ class ArthaAgent:
                         "status": o.status.value,
                         "time": o.placed_at.isoformat() if o.placed_at else None,
                     })
-                
+
                 stats = order_manager.get_daily_stats()
-                
+
                 return json.dumps({
                     "orders": order_list,
                     "total_orders": len(order_list),
                     "daily_stats": stats,
                     "mode": "PAPER TRADING",
                 }, default=str)
-                
+
             except Exception as e:
                 logger.error(f"get_paper_order_history error: {e}")
                 return json.dumps({"error": f"Could not fetch order history: {str(e)}"})
 
         # ═══════════════════════════════════════════════════════════
-        # Return all tools
+        # Assemble tool list (explicit groups — no index slicing)
         # ═══════════════════════════════════════════════════════════
 
-        all_tools = [
-            # Analysis tools
+        analysis_tools = [
             screen_stocks, predict_stock, get_market_overview, get_stock_history,
             get_sentiment, generate_pattern_chart, search_web, search_financial_docs,
-            # Action tools
+            jev_pretrade_check,
+        ]
+        action_tools = [
             manage_watchlist, run_backtest, create_strategy, list_strategies,
             compare_strategies, get_portfolio, add_transaction,
-            # Paper trading tools
-            paper_trade, get_paper_positions, get_paper_order_history,
         ]
-        
-        # Only include paper trading tools if order_manager is available
-        if order_manager is None:
-            all_tools = all_tools[:15]  # Exclude last 3 paper trading tools
-            logger.info(f"Agent initialized with {len(all_tools)} tools (paper trading disabled)")
-        else:
+        paper_tools = [paper_trade, get_paper_positions, get_paper_order_history]
+
+        all_tools = analysis_tools + action_tools
+        if order_manager is not None:
+            all_tools += paper_tools
             logger.info(f"Agent initialized with {len(all_tools)} tools (paper trading enabled)")
-        
+        else:
+            logger.info(f"Agent initialized with {len(all_tools)} tools (paper trading disabled)")
+
         return all_tools
 
     def _build_graph(self):
@@ -982,13 +1346,13 @@ class ArthaAgent:
 
         def call_model(state: MessagesState):
             messages = state['messages']
-            
+
             # Separate system message from conversation messages
-            system_msg = SystemMessage(content=SYSTEM_PROMPT)
-            
+            system_msg = SystemMessage(content=_build_system_prompt())
+
             # Filter out any existing system messages
             conv_messages = [m for m in messages if not isinstance(m, SystemMessage)]
-            
+
             # Trim conversation history — keep first user message (context) + last N messages
             if len(conv_messages) > max_history:
                 first_user_msg = None
@@ -996,12 +1360,21 @@ class ArthaAgent:
                     if isinstance(m, HumanMessage):
                         first_user_msg = m
                         break
-                tail = conv_messages[-max_history:]
+                
+                idx = len(conv_messages) - max_history
+                if idx < 0:
+                    idx = 0
+                
+                # Back up idx if it points to a ToolMessage so we don't sever it from its AIMessage
+                while idx > 0 and getattr(conv_messages[idx], 'type', '') == 'tool':
+                    idx -= 1
+                    
+                tail = conv_messages[idx:]
                 if first_user_msg and first_user_msg not in tail:
                     conv_messages = [first_user_msg] + tail
                 else:
                     conv_messages = tail
-            
+
             # Prepend system prompt
             full_messages = [system_msg] + conv_messages
 
@@ -1025,11 +1398,11 @@ class ArthaAgent:
         workflow = StateGraph(MessagesState)
         workflow.add_node("agent", call_model)
         workflow.add_node("tools", ToolNode(self.tools))
-        
+
         workflow.add_edge(START, "agent")
         workflow.add_conditional_edges("agent", tools_condition)
         workflow.add_edge("tools", "agent")
-        
+
         return workflow
 
     def _get_postgres_connection_string(self) -> str:
@@ -1079,7 +1452,7 @@ class ArthaAgent:
         timer = threading.Timer(self.STREAM_TIMEOUT_SECONDS, timed_out.set)
         timer.daemon = True
         timer.start()
-        
+
         try:
             # Use connection pool if available, otherwise fallback to direct connection
             if self._pg_pool:
@@ -1089,7 +1462,7 @@ class ArthaAgent:
                 conn_str = self._get_postgres_connection_string()
                 with Connection.connect(conn_str, autocommit=True) as conn:
                     yield from self._stream_with_connection(conn, user_message, session_id, timed_out)
-                
+
         except Exception as e:
             logger.error(f"Agent stream error: {e}", exc_info=True)
             yield f"data: {json.dumps({'error': 'I encountered an internal error. Please try again.'})}\n\n"
@@ -1100,9 +1473,14 @@ class ArthaAgent:
     def _stream_with_connection(self, conn, user_message, session_id, timed_out):
         """Internal streaming logic using a provided database connection."""
         checkpointer = PostgresSaver(conn)
+        try:
+            checkpointer.setup()
+        except Exception as e:
+            logger.debug(f"Checkpointer setup skipped in stream: {e}")
+            
         app = self.graph.compile(checkpointer=checkpointer)
         thread_config = {"configurable": {"thread_id": session_id}}
-        
+
         for msg, metadata in app.stream(
             {"messages": [HumanMessage(content=user_message)]},
             thread_config,
@@ -1113,7 +1491,7 @@ class ArthaAgent:
                 timeout_msg = json.dumps({'content': '\n\n⏱️ Response timed out. Please try a simpler question or ask about a specific stock.'})
                 yield f"data: {timeout_msg}\n\n"
                 break
-            
+
             if msg.type in ("AIMessageChunk", "ai"):
                 if isinstance(msg.content, str) and msg.content:
                     yield f"data: {json.dumps({'content': msg.content})}\n\n"
@@ -1121,7 +1499,7 @@ class ArthaAgent:
                     for part in msg.content:
                         if isinstance(part, dict) and "text" in part:
                             yield f"data: {json.dumps({'content': part['text']})}\n\n"
-                
+
                 if hasattr(msg, 'tool_call_chunks') and msg.tool_call_chunks:
                     for tc in msg.tool_call_chunks:
                         if tc.get("name"):
@@ -1135,6 +1513,7 @@ class ArthaAgent:
                                 "generate_pattern_chart": "🎨 Generating chart...",
                                 "search_web": "🌐 Searching the web...",
                                 "search_financial_docs": "📄 Searching documents...",
+                                "jev_pretrade_check": "🛡️ Running Jev pre-trade gate...",
                                 "manage_watchlist": "⭐ Updating watchlist...",
                                 "run_backtest": "📊 Running backtest...",
                                 "create_strategy": "🔧 Creating strategy...",
@@ -1142,7 +1521,7 @@ class ArthaAgent:
                                 "compare_strategies": "⚖️ Comparing strategies...",
                                 "get_portfolio": "💼 Loading portfolio...",
                                 "add_transaction": "💰 Recording transaction...",
-                                "paper_trade": "💹 Placing paper trade...",
+                                "paper_trade": "💹 Checking Jev gate & placing paper trade...",
                                 "get_paper_positions": "📊 Loading positions...",
                                 "get_paper_order_history": "📋 Loading order history...",
                             }
@@ -1150,8 +1529,13 @@ class ArthaAgent:
                             yield f"data: {json.dumps({'tool': status})}\n\n"
             elif getattr(msg, 'type', '') == "tool":
                 if isinstance(msg.content, str) and "chart:pattern" in msg.content:
-                    yield f"data: {json.dumps({'content': chr(10) + msg.content + chr(10)})}\n\n"
-            
+                    try:
+                        content_dict = json.loads(msg.content)
+                        chart_md = content_dict.get("chart", msg.content)
+                    except json.JSONDecodeError:
+                        chart_md = msg.content
+                    yield f"data: {json.dumps({'content': chr(10) + chart_md + chr(10)})}\n\n"
+
         yield "data: [DONE]\n\n"
 
     def clear_session(self, session_id: str) -> bool:
@@ -1192,98 +1576,98 @@ def _generate_signals_for_agent(strategy: str, price_data) -> 'pd.DataFrame':
     """
     import pandas as pd
     import numpy as np
-    
+
     df = price_data.copy()
     df = df.sort_values('date').reset_index(drop=True)
-    
+
     close = df['close']
     signals = pd.DataFrame({'date': df['date'], 'signal': 0})
-    
+
     strategy = strategy.lower().strip()
-    
+
     if strategy in ('momentum', 'momentum_hunter'):
         # RSI + MACD momentum
         rsi = _compute_rsi_helper(close)
         macd, signal_line, _ = _compute_macd_helper(close)
         sma_20 = close.rolling(20).mean()
         sma_50 = close.rolling(50).mean()
-        
+
         buy = (rsi > 50) & (rsi < 75) & (macd > signal_line) & (close > sma_20)
         sell = (rsi > 75) | (macd < signal_line) | (close < sma_50)
         signals.loc[buy, 'signal'] = 1
         signals.loc[sell, 'signal'] = -1
-        
+
     elif strategy in ('swing', 'swing_trader'):
         rsi = _compute_rsi_helper(close)
         macd, signal_line, hist = _compute_macd_helper(close)
-        
+
         buy = (rsi > 40) & (rsi < 65) & (macd > signal_line) & (hist > hist.shift(1))
         sell = (rsi > 70) | (hist < 0)
         signals.loc[buy, 'signal'] = 1
         signals.loc[sell, 'signal'] = -1
-        
+
     elif strategy in ('breakout', 'breakout_scanner'):
         high_20 = df['high'].rolling(20).max()
         vol_avg = df['volume'].rolling(20).mean()
-        
+
         buy = (close > high_20.shift(1)) & (df['volume'] > vol_avg * 1.5)
         sma_20 = close.rolling(20).mean()
         sell = close < sma_20
         signals.loc[buy, 'signal'] = 1
         signals.loc[sell, 'signal'] = -1
-        
+
     elif strategy in ('value', 'value_investing'):
         rsi = _compute_rsi_helper(close)
         sma_200 = close.rolling(200).mean()
-        
+
         buy = (rsi < 35) & (close < sma_200 * 0.95)
         sell = (rsi > 65) | (close > sma_200 * 1.10)
         signals.loc[buy, 'signal'] = 1
         signals.loc[sell, 'signal'] = -1
-        
+
     elif strategy in ('mean_reversion',):
         rsi = _compute_rsi_helper(close)
         bb_mid = close.rolling(20).mean()
         bb_std = close.rolling(20).std()
         bb_lower = bb_mid - 2 * bb_std
         bb_upper = bb_mid + 2 * bb_std
-        
+
         buy = (close < bb_lower) & (rsi < 35)
         sell = (close > bb_upper) | (rsi > 70)
         signals.loc[buy, 'signal'] = 1
         signals.loc[sell, 'signal'] = -1
-        
+
     elif strategy in ('trend_following',):
         sma_50 = close.rolling(50).mean()
         sma_200 = close.rolling(200).mean()
         rsi = _compute_rsi_helper(close)
-        
+
         buy = (sma_50 > sma_200) & (close > sma_50) & (rsi > 50)
         sell = (sma_50 < sma_200) | (close < sma_50)
         signals.loc[buy, 'signal'] = 1
         signals.loc[sell, 'signal'] = -1
-        
+
     elif strategy in ('piotroski',):
         # Simplified — use moving average crossover as proxy
         sma_20 = close.rolling(20).mean()
         sma_50 = close.rolling(50).mean()
         rsi = _compute_rsi_helper(close)
-        
+
         buy = (sma_20 > sma_50) & (rsi > 45) & (rsi < 70)
         sell = (sma_20 < sma_50) | (rsi > 75)
         signals.loc[buy, 'signal'] = 1
         signals.loc[sell, 'signal'] = -1
-        
+
     else:
         # Default: simple moving average crossover
         sma_20 = close.rolling(20).mean()
         sma_50 = close.rolling(50).mean()
-        
+
         buy = (sma_20 > sma_50) & (sma_20.shift(1) <= sma_50.shift(1))
         sell = (sma_20 < sma_50) & (sma_20.shift(1) >= sma_50.shift(1))
         signals.loc[buy, 'signal'] = 1
         signals.loc[sell, 'signal'] = -1
-    
+
     return signals
 
 

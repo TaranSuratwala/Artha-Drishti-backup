@@ -767,3 +767,19 @@ export async function streamAgentChat(message, sessionId, onChunk, onDone, onErr
         if (onError) onError(err);
     }
 }
+
+// ============================================================================
+// PAPER TRADING API
+// ============================================================================
+export async function fetchPaperOrders() {
+    return get('/paper/orders', { cacheTtl: 0 });
+}
+
+export async function fetchPaperPositions() {
+    return get('/paper/positions', { cacheTtl: 0 });
+}
+
+export async function fetchPaperFunds() {
+    return get('/paper/funds', { cacheTtl: 0 });
+}
+

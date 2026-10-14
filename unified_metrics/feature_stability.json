@@ -1,0 +1,26 @@
+{
+    "open": {
+        "psi": 0.23298149227620607,
+        "status": "stable"
+    },
+    "high": {
+        "psi": 0.1453627924512815,
+        "status": "stable"
+    },
+    "low": {
+        "psi": 0.14580358617015143,
+        "status": "stable"
+    },
+    "close": {
+        "psi": 0.1820767680516131,
+        "status": "stable"
+    },
+    "volume": {
+        "psi": 0.06991029105473703,
+        "status": "stable"
+    },
+    "return": {
+        "psi": 0.010268643482555627,
+        "status": "stable"
+    }
+}

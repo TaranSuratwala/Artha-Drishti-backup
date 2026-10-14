@@ -693,6 +693,15 @@ try:
 except Exception as _monitor_err:
     logger.warning(f"⚠️ Model monitoring unavailable: {_monitor_err}")
 
+# ==================== PAPER TRADING API ====================
+try:
+    from paper_trading_api import create_paper_trading_blueprint
+    if order_manager and broker:
+        app.register_blueprint(create_paper_trading_blueprint(order_manager, broker))
+        logger.info("✅ Paper trading endpoints registered (/api/paper/*)")
+except Exception as _paper_err:
+    logger.warning(f"⚠️ Paper trading API unavailable: {_paper_err}")
+
 def clean_row(row):
     """Convert database row to JSON-serializable format"""
     cleaned: dict = {}
@@ -4914,7 +4923,13 @@ def manage_watchlist():
     except Exception:
         current_user = None
     
-    user_id = str(current_user.get('id', 'default')) if current_user else 'default'
+    if isinstance(current_user, dict):
+        user_id = str(current_user.get('id', 'default'))
+    elif current_user:
+        user_id = str(current_user)
+    else:
+        user_id = 'default'
+        
     user_watchlist = _load_user_watchlist(user_id)
     
     if request.method == 'GET':

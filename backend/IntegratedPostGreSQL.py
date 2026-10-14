@@ -561,13 +561,15 @@ class NSEDataPipeline:
             'issues_fixed': 0,
             'details': []
         }
-        
         try:
             with self.engine.begin() as conn:
                 if ticker:
                     # Reconcile specific ticker
                     query = text("""
-                        SELECT ticker, date, open, high, low, close, adj_close, volume
+                        SELECT ticker, date, open, high, low, close, adj_close, volume,
+                               COALESCE(delivery_qty, 0) as delivery_qty,
+                               COALESCE(delivery_percentage, 0.0) as delivery_percentage,
+                               COALESCE(traded_qty, volume) as traded_qty
                         FROM nse_stocks
                         WHERE ticker = :ticker
                         ORDER BY date

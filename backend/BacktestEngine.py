@@ -165,19 +165,23 @@ class BacktestEngine:
 
         return round(slippage_amount, 2)
 
-    # ─── Transaction Costs ──────────────────────────────────
-
-    def calculate_transaction_cost(self, price: float, quantity: int) -> float:
-        """Apply per-trade or per-share commission with minimum fee."""
-        cfg = self.config
-        trade_value = price * quantity
-
-        if cfg.commission_per_share > 0:
-            cost = cfg.commission_per_share * quantity
-        else:
-            cost = trade_value * (cfg.transaction_cost_pct / 100)
-
-        return max(cost, cfg.min_commission)
+    def calculate_transaction_cost(self, price: float, quantity: int, is_buy: bool = True) -> float:
+        """Apply accurate NSE transaction costs."""
+        try:
+            from nse_cost_model import NSECostModel, Segment
+            model = NSECostModel()
+            side = "BUY" if is_buy else "SELL"
+            result = model.compute(side, price, quantity, Segment.CASH_DELIVERY)
+            return result['total']
+        except ImportError:
+            # Fallback if module is missing
+            cfg = self.config
+            trade_value = price * quantity
+            if cfg.commission_per_share > 0:
+                cost = cfg.commission_per_share * quantity
+            else:
+                cost = trade_value * (cfg.transaction_cost_pct / 100)
+            return max(cost, cfg.min_commission)
 
     # ─── Position Sizing ────────────────────────────────────
 
@@ -247,8 +251,8 @@ class BacktestEngine:
         if ot == OrderType.MARKET:
             if self.config.use_next_bar_open:
                 return open_p
-            # Approximate mid-price
-            return (open_p + close) / 2
+            # Fill at close to prevent unrealistic mid-price fills
+            return close
 
         elif ot == OrderType.LIMIT:
             if signal == 1:  # Buy limit: fill if price dips to limit
@@ -351,12 +355,13 @@ class BacktestEngine:
         cfg = self.config
 
         # --- Merge signals with price data ---
-        if 'date' in signals.columns and 'date' in price_data.columns:
-            merged = pd.merge(signals[['date', 'signal']], price_data, on='date', how='inner')
-        else:
-            merged = price_data.copy()
-            if 'signal' not in merged.columns:
-                merged['signal'] = signals['signal'].values[:len(merged)]
+        if 'date' not in signals.columns or 'date' not in price_data.columns:
+            raise ValueError("Both signals and price_data must contain a 'date' column to prevent look-ahead bias.")
+        merged = pd.merge(price_data, signals[['date', 'signal']], on='date', how='left')
+        merged['signal'] = merged['signal'].fillna(0).astype(int)
+        
+        if cfg.use_next_bar_open:
+            merged['signal'] = merged['signal'].shift(1).fillna(0).astype(int)
 
         # --- Normalize data ---
         merged = DataNormalizer.normalize(merged, cfg)
@@ -409,7 +414,7 @@ class BacktestEngine:
                     )
                     capital += position.exit_price * position.quantity
                     # Only deduct exit costs from capital
-                    exit_txn = self.calculate_transaction_cost(exit_price, position.quantity)
+                    exit_txn = self.calculate_transaction_cost(exit_price, position.quantity, is_buy=False)
                     exit_slip = self.calculate_slippage(exit_price, position.quantity, atr, avg_vol, False)
                     capital -= exit_txn + exit_slip
                     total_txn_costs += exit_txn + position.transaction_costs
@@ -424,7 +429,7 @@ class BacktestEngine:
                     self._close_position(
                         position, exit_price, ExitReason.SIGNAL, row, atr, avg_vol
                     )
-                    exit_txn = self.calculate_transaction_cost(exit_price, position.quantity)
+                    exit_txn = self.calculate_transaction_cost(exit_price, position.quantity, is_buy=False)
                     exit_slip = self.calculate_slippage(exit_price, position.quantity, atr, avg_vol, False)
                     capital += exit_price * position.quantity - exit_txn - exit_slip
                     total_txn_costs += exit_txn + position.transaction_costs
@@ -462,7 +467,7 @@ class BacktestEngine:
                     continue
 
                 # Costs
-                entry_txn = self.calculate_transaction_cost(fill_price, quantity)
+                entry_txn = self.calculate_transaction_cost(fill_price, quantity, is_buy=True)
                 entry_slip = self.calculate_slippage(
                     fill_price, quantity, atr, avg_vol, True
                 )
@@ -510,7 +515,7 @@ class BacktestEngine:
             self._close_position(
                 position, exit_price, ExitReason.END_OF_BACKTEST, last_row, atr, avg_vol
             )
-            exit_txn = self.calculate_transaction_cost(exit_price, position.quantity)
+            exit_txn = self.calculate_transaction_cost(exit_price, position.quantity, is_buy=False)
             exit_slip = self.calculate_slippage(exit_price, position.quantity, atr, avg_vol, False)
             capital += exit_price * position.quantity - exit_txn - exit_slip
             total_txn_costs += exit_txn + position.transaction_costs

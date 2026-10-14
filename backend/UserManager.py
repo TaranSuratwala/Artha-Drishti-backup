@@ -82,6 +82,23 @@ class UserManager:
             logger.error(f"Create User Error: {e}")
             return {"error": str(e)}
 
+    def update_password(self, username, new_password):
+        """Force update a user's password."""
+        password_hash = generate_password_hash(new_password)
+        try:
+            with self.engine.begin() as conn:
+                result = conn.execute(text("""
+                    UPDATE users 
+                    SET password_hash = :p 
+                    WHERE username = :u
+                """), {'p': password_hash, 'u': username})
+                if result.rowcount > 0:
+                    return True
+                return False
+        except Exception as e:
+            logger.error(f"Update Password Error: {e}")
+            return False
+
     def verify_user(self, username, password):
         """Verify credentials and return user info"""
         try:

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Search, TrendingUp, BarChart2, ArrowDownRight, Star, X } from 'lucide-react';
 import { Card, StatCard, SkeletonLoader } from '../components/ui';
-import { MarketOverview, TopMovers, StockRecommendations } from '../components/dashboard';
+import { MarketOverview, TopMovers, StockRecommendations, PaperTradingOrders } from '../components/dashboard';
 
 export default function DashboardPage({
     user,
@@ -64,6 +64,9 @@ export default function DashboardPage({
 
             {/* AI Stock Recommendations */}
             <StockRecommendations onTickerClick={handleOpenTicker} />
+
+            {/* AI Paper Trading Orders */}
+            <PaperTradingOrders />
 
             {/* Market Overview Widget */}
             <MarketOverview />

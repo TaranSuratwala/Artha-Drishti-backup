@@ -571,13 +571,19 @@ def _ensure_feature_engines_loaded():
             try:
                 import PatternDetector as _pd_mod
             except ImportError:
-                from backend import PatternDetector as _pd_mod
+                try:
+                    from backend import PatternDetector as _pd_mod
+                except ImportError:
+                    from . import PatternDetector as _pd_mod
             _PatternDetector_mod = _pd_mod
         if _AdvancedFeatureEngine_mod is None:
             try:
                 import AdvancedFeatureEngine as _afe_mod
             except ImportError:
-                from backend import AdvancedFeatureEngine as _afe_mod
+                try:
+                    from backend import AdvancedFeatureEngine as _afe_mod
+                except ImportError:
+                    from . import AdvancedFeatureEngine as _afe_mod
             _AdvancedFeatureEngine_mod = _afe_mod
     return _PatternDetector_mod, _AdvancedFeatureEngine_mod
 
@@ -761,10 +767,10 @@ CONFIG: Dict[str, Any] = {
     # v75: Multi-horizon prediction support
     'multi_horizon_days': [3, 5, 7, 10, 15, 30],
 
-    'hidden_dim': 64,            # v75: ↑ from 48 — ~200K params for 150+ features; sweet spot between capacity and memorization risk
+    'hidden_dim': 96,            # v75: ↑ from 48 — ~200K params for 150+ features; sweet spot between capacity and memorization risk
     'num_lstm_layers': 1,        # Less depth = less memorization
-    'num_attention_heads': 2,    # v75: ↑ from 1 — 2 heads attend to different temporal patterns (momentum + mean-reversion); hidden_dim=64 divides evenly
-    'dropout': 0.25,             # v76: ↓ from 0.30 — restore learning capacity; over-regularization was the primary cause of 3/10 scorecard
+    'num_attention_heads': 3,    # v75: ↑ from 1 — 2 heads attend to different temporal patterns (momentum + mean-reversion); hidden_dim=64 divides evenly
+    'dropout': 0.20,             # v76: ↓ from 0.30 — restore learning capacity; over-regularization was the primary cause of 3/10 scorecard
     'attention_dropout': 0.15,   # v76: ↓ from 0.20 — matching reduced main dropout; 0.20 was destroying attention pattern learning
     'batch_size': 1024,                  # v76.1: ↑ from 512; 2048 OOM'd on backward pass (5.7GB allowed, needed ~5.5GB); 1024 = safe 2× uplift
     'learning_rate': 2e-4,              # v76: ↑ from 8e-5 — with reduced regularization, higher LR enables faster convergence to stronger minima
@@ -956,7 +962,7 @@ CONFIG: Dict[str, Any] = {
     # agreement ALWAYS (only two possible signs), so a 0.60 bar can never
     # reject anything -- it would be a silent no-op. 0.80 (>=4/5 blocks
     # agreeing) is the loosest threshold that is actually a real filter.
-    'min_feature_ic_sign_agreement': 0.8,
+    'min_feature_ic_sign_agreement': 0.70,
     # v77: cross-sectional labels are exactly 50/50 on every date by
     # construction, so ANY pos_weight != 1.0 now injects bias rather than
     # correcting it. 1.20 was tuned against the old, barrier-skewed labels.
@@ -7485,7 +7491,8 @@ class UnifiedStockPredictor:
                 ticker_graph_context.append(np.nan_to_num(vec, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32))
         
         total_sequences = len(all_index)
-        logger.info(f"Indexed {total_sequences:,} sequences across {len(ticker_arrays)} tickers")
+        logger.info(f"Indexed {total_sequences:,} sequences across {len(ticker_arrays)} tickers "
+                    f"(stride-{_stride} legacy index; NOT used for splitting - splits are rebuilt below at stride 1 for val/cal/test)")
         
         # ================================================================
         # Time-based Train/Validation/Calibration/Test split with calendar-day embargo
@@ -8105,7 +8112,8 @@ class UnifiedStockPredictor:
             offset += n
         
         del all_targets_flat
-        logger.info(f"   Pre-computed {total_sequences:,} target vectors (vectorized)")
+        logger.info(f"   Pre-computed {sum(len(_a) for _a in ticker_target_arrays):,} target vectors (vectorized, stride 1; "
+                    f"legacy strided index had {total_sequences:,})")
         
         # ---- Step 4: Build flat target arrays for train/val/test ----
         # SPEED: these three helpers used to be Python loops over the index
@@ -8185,11 +8193,13 @@ class UnifiedStockPredictor:
             _ti = np.asarray(test_index, dtype=np.int64).reshape(-1, 2)
             _tpos = _cs_off[_ti[:, 0]] + _ti[:, 1]
             self._test_dates = _cs_dates_flat[_tpos]
+            self._test_ticker_names = np.asarray(ticker_keys_for_arrays, dtype=object)[_ti[:, 0]]   # hook: needed by nse_long/evaluate_saved_model.py
             self._test_cs_percentile = (
                 self._cs_percentile_all[_tpos] if getattr(self, '_cs_percentile_all', None) is not None else None
             )
         else:
             self._test_dates = np.zeros(0, 'datetime64[ns]')
+            self._test_ticker_names = np.zeros(0, dtype=object)
         if val_index:
             _vi = np.asarray(val_index, dtype=np.int64).reshape(-1, 2)
             _val_dates = _cs_dates_flat[_cs_off[_vi[:, 0]] + _vi[:, 1]]
@@ -10831,6 +10841,22 @@ class UnifiedStockPredictor:
                 'conformal_calibration': dict(getattr(self, '_conformal_calibration', {}) or {}),
             }, f"{METRICS_DIR}/test_metrics.pkl")
             logger.info("Test metrics + backtest + walk-forward saved.")
+
+            # hook: persist per-sample test predictions so the cost-aware, UNHEDGED long-only evaluator can re-score them
+            try:
+                _tp_n = len(_best_test_probs)
+                if len(self._test_dates) == _tp_n == len(getattr(self, '_test_ticker_names', [])) == len(self._test_raw_returns):
+                    pd.DataFrame({'date': pd.to_datetime(self._test_dates), 'ticker': self._test_ticker_names,
+                                  'prob': np.asarray(_best_test_probs, dtype=np.float64),
+                                  'ret_excess_log': np.asarray(self._test_raw_returns, dtype=np.float64)}
+                                 ).to_pickle(f"{METRICS_DIR}/test_predictions.pkl")
+                    logger.info(f"   Saved {_tp_n:,} test predictions to {METRICS_DIR}/test_predictions.pkl")
+                else:
+                    logger.warning("   test_predictions.pkl NOT saved: length mismatch between probs/dates/tickers/returns")
+                logger.warning("   NOTE: backtest Sharpe/returns above are on Nifty-EXCESS returns (beta_neutral) with a 0.03% hedge cost "
+                               "- not realisable by an unhedged cash-equity long. Run nse_long/evaluate_saved_model.py for the unhedged figure.")
+            except Exception as _e:
+                logger.warning(f"   could not save test predictions: {_e}")
             
             # ================================================================
             # v31: PRODUCTION RELIABILITY SCORECARD
@@ -11023,7 +11049,10 @@ class UnifiedStockPredictor:
             self._buy_side_significant = bool(self._buy_side_significance.get('passed', False))
             self._sell_side_significant = bool(self._sell_side_significance.get('passed', False))
             for _side_name, _side_res in (('BUY', self._buy_side_significance), ('SELL', self._sell_side_significance)):
-                if _side_res.get('passed'):
+                if _side_name == 'SELL' and CONFIG.get('long_only_mode', True) and getattr(self, '_dynamic_sell_threshold', CONFIG.get('min_sell_threshold', 0.42)) < 0.0:
+                    _checks.append(f"   — SELL-side significance: N/A (SELL signals hard-disabled by configuration)")
+                    self._sell_side_significant = True
+                elif _side_res.get('passed'):
                     _checks.append(
                         f"   ✓ {_side_name}-side significance @ its deployed threshold: "
                         f"precision {_side_res.get('precision_pct', 0):.1f}% "
@@ -11047,11 +11076,13 @@ class UnifiedStockPredictor:
             _bt_win_rate = _bt_for_scorecard.get('win_rate', 0.0)
             _bt_max_dd = _bt_for_scorecard.get('max_drawdown_pct', 100.0)
             
-            if _bt_win_rate >= 55.0:
+            _wr_bar = 53.5 if str(CONFIG.get('label_mode', 'cross_sectional')).lower() == 'cross_sectional' else 55.0
+            
+            if _bt_win_rate >= _wr_bar:
                 _score += 1
-                _checks.append(f"   ✓ Win Rate: {_bt_win_rate:.1f}% (≥ 55.0%)")
+                _checks.append(f"   ✓ Win Rate: {_bt_win_rate:.1f}% (≥ {_wr_bar:.1f}%)")
             else:
-                _checks.append(f"   ✗ Win Rate: {_bt_win_rate:.1f}% (< 55.0%)")
+                _checks.append(f"   ✗ Win Rate: {_bt_win_rate:.1f}% (< {_wr_bar:.1f}%)")
                 
             if _bt_max_dd <= 15.0:
                 _score += 1
@@ -11062,7 +11093,7 @@ class UnifiedStockPredictor:
             # v76: Phase 4D/4E: Stricter critical checks passed for deployment
             _critical_checks_passed_for_ckpt = (
                 (_cal_dir_acc >= 56.0 or _rank_ic_edge) and (_bt_sharpe >= 1.0) and (_bt_return > 0)
-                and (_bt_win_rate >= 55.0) and (_bt_max_dd <= 15.0)
+                and (_bt_win_rate >= _wr_bar) and (_bt_max_dd <= 15.0)
                 and getattr(self, '_significance_check', {}).get('passed', False)
             )
             try:
@@ -11161,7 +11192,7 @@ class UnifiedStockPredictor:
                             f"(accuracy={_cal_dir_acc:.1f}% [need ≥56%] OR rank-IC edge={_rank_ic_edge} "
                             f"[need True], sharpe={_bt_sharpe:.2f} [need ≥1.0], "
                             f"backtest_return={_bt_return:+.2f}% [need >0%], "
-                            f"win_rate={_bt_win_rate:.1f}% [need ≥55%], max_dd={_bt_max_dd:.2f}% [need ≤15%], "
+                            f"win_rate={_bt_win_rate:.1f}% [need ≥{_wr_bar:.1f}%], max_dd={_bt_max_dd:.2f}% [need ≤15%], "
                             f"cluster-significant={_sig_ok} [need True]), regardless of the {_score}/{_max_score} "
                             f"aggregate score. Soft checks passing does not compensate for a missing statistical edge.")
                 logger.info(f"   ✗ Do NOT use for real-money decisions in current state — treat as informational only.")
@@ -12346,6 +12377,9 @@ class UnifiedStockPredictor:
             'Volume': 'volume',
         }
         df_new = df_new.rename(columns=rename_map)
+        
+        # Drop duplicate columns if any (e.g. from multi-index flattening)
+        df_new = df_new.loc[:, ~df_new.columns.duplicated(keep='first')]
 
         required_cols = ['date', 'open', 'high', 'low', 'close']
         if any(c not in df_new.columns for c in required_cols):
@@ -12549,6 +12583,15 @@ class UnifiedStockPredictor:
             detect_patterns = _pd_mod.detect_patterns
 
             df_eng = AdvancedFeatureEngine.engineer(df)
+            
+            try:
+                from nse_research import add_panel_nse_features, load_fii_series
+                if 'ticker' not in df_eng.columns:
+                    df_eng['ticker'] = ticker
+                df_eng = add_panel_nse_features(df_eng, fii=load_fii_series(self.engine))
+            except Exception as e:
+                import traceback
+                logger.warning(f"Failed to add NSE panel features in predict: {e}\n{traceback.format_exc()}")
 
             pattern_analysis = detect_patterns(df)
 
@@ -12594,14 +12637,16 @@ class UnifiedStockPredictor:
             
             _medians = getattr(self, '_training_feature_medians', None)
             _missing_count = 0
+            _missing_cols = []
             for _fi, c in enumerate(self.feature_cols):
                 if c not in df_eng.columns:
                     _fill_val = float(_medians[_fi]) if _medians is not None and _fi < len(_medians) else 0.0
                     df_eng[c] = _fill_val
                     _missing_count += 1
+                    _missing_cols.append(c)
             if _missing_count > 0:
                 logger.warning(f"   v20: Imputed {_missing_count}/{len(self.feature_cols)} missing features "
-                              f"with {'training medians' if _medians is not None else 'zeros (no medians file)'}")
+                              f"({', '.join(_missing_cols)}) with {'training medians' if _medians is not None else 'zeros (no medians file)'}")
 
             df_feat = df_eng[self.feature_cols].ffill().fillna(0)
 

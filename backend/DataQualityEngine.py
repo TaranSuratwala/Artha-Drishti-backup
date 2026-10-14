@@ -33,6 +33,7 @@ class DataQualityEngine:
                  gap_threshold_pct: float = 20.0,
                  volume_drop_threshold: float = 0.05,
                  volume_drop_days: int = 5,
+                 clip_ohlc: bool = False,
                  metrics_dir: str = 'unified_metrics'):
         self.min_trading_days = min_trading_days
         self.min_price = min_price
@@ -45,6 +46,9 @@ class DataQualityEngine:
         self.gap_threshold_pct = gap_threshold_pct
         self.volume_drop_threshold = volume_drop_threshold
         self.volume_drop_days = volume_drop_days
+        # clip_ohlc: per-ticker FULL-SAMPLE IQR clipping of O/H/L/C uses future quantiles (look-ahead), clips each
+        # column independently (can invert high<low) and distorts true tail returns. Disabled by default.
+        self.clip_ohlc = clip_ohlc
         self.metrics_dir = metrics_dir
         
         os.makedirs(self.metrics_dir, exist_ok=True)
@@ -120,18 +124,19 @@ class DataQualityEngine:
             if split_idx.any():
                 dates = group.loc[split_idx, 'date'].astype(str).tolist()
                 ca_report['splits_bonuses'].append({'ticker': ticker, 'dates': dates})
-                df.loc[split_idx.index, 'is_split_bonus'] = True
+                df.loc[split_idx[split_idx].index, 'is_split_bonus'] = True   # FIX: was split_idx.index => flagged EVERY row of the ticker (incl. pre-event dates = look-ahead)
                 
             # Suspensions
-            # rolling median volume over previous 20 days
-            roll_med_vol = group['volume'].rolling(20, min_periods=1).median().shift(1)
-            vol_drop = group['volume'] < (self.volume_drop_threshold * roll_med_vol)
-            # Find consecutive drops
-            is_susp = vol_drop.rolling(self.volume_drop_days).sum() >= self.volume_drop_days
-            if is_susp.any():
-                dates = group.loc[is_susp, 'date'].astype(str).tolist()
-                ca_report['suspensions'].append({'ticker': ticker, 'dates': dates})
-                df.loc[is_susp.index, 'is_suspended'] = True
+            if 'volume' in group.columns:
+                # rolling median volume over previous 20 days
+                roll_med_vol = group['volume'].rolling(20, min_periods=1).median().shift(1)
+                vol_drop = group['volume'] < (self.volume_drop_threshold * roll_med_vol)
+                # Find consecutive drops
+                is_susp = vol_drop.rolling(self.volume_drop_days).sum() >= self.volume_drop_days
+                if is_susp.any():
+                    dates = group.loc[is_susp, 'date'].astype(str).tolist()
+                    ca_report['suspensions'].append({'ticker': ticker, 'dates': dates})
+                    df.loc[is_susp[is_susp].index, 'is_suspended'] = True
                 
         return df, dict(ca_report)
 
@@ -145,7 +150,7 @@ class DataQualityEngine:
         def winsorize_group(g):
             nonlocal out_report
             # OHLC
-            for col in ['open', 'high', 'low', 'close']:
+            for col in (['open', 'high', 'low', 'close'] if self.clip_ohlc else []):
                 if col in g.columns:
                     q1 = g[col].quantile(0.25)
                     q3 = g[col].quantile(0.75)
@@ -157,75 +162,95 @@ class DataQualityEngine:
                     out_report[f'{col}_clipped'] += clip_mask.sum()
                     g[col] = g[col].clip(lower=lower, upper=upper)
                     
-            # Volume
+            # Volume: CAUSAL rolling statistics (strictly <= t, no full-history leak)
             if 'volume' in g.columns:
-                # Add 1 to avoid log(0)
-                log_v = np.log1p(g['volume'])
-                mean_v = log_v.mean()
-                std_v = log_v.std()
-                if not pd.isna(std_v) and std_v > 0:
-                    upper_log = mean_v + self.max_volume_zscore * std_v
-                    upper_vol = np.expm1(upper_log)
-                    clip_mask = g['volume'] > upper_vol
-                    out_report['volume_clipped'] += clip_mask.sum()
-                    g['volume'] = g['volume'].clip(upper=upper_vol)
+                log_v = np.log1p(g['volume'].clip(lower=0))
+                roll_med = log_v.rolling(60, min_periods=10).median()
+                roll_mad = (log_v - roll_med).abs().rolling(60, min_periods=10).median()
+                roll_scale = 1.4826 * roll_mad.replace(0, np.nan).fillna(1.0)
+                upper_log = roll_med + self.max_volume_zscore * roll_scale
+                upper_vol = np.expm1(upper_log.bfill().fillna(log_v)) if False else np.expm1(upper_log.fillna(log_v))
+                clip_mask = (g['volume'] > upper_vol) & upper_vol.notna()
+                out_report['volume_clipped'] += clip_mask.sum()
+                g['volume'] = np.where(clip_mask, upper_vol, g['volume'])
             return g
             
         df = df.groupby('ticker', group_keys=False).apply(winsorize_group)
         
         # Calculate returns if needed or just clip them if they exist
-        # If returns are not pre-calculated, we don't clip them here to avoid modifying feature space unexpectedly,
-        # but the prompt specifically says "Returns: clip at ±max_daily_return".
-        df['_daily_return'] = df.groupby('ticker')['close'].pct_change()
-        if '_daily_return' in df.columns:
-            clip_mask = (df['_daily_return'] > self.max_daily_return) | (df['_daily_return'] < -self.max_daily_return)
+        if 'return' in df.columns:
+            clip_mask = (df['return'] > self.max_daily_return) | (df['return'] < -self.max_daily_return)
             out_report['return_clipped'] += clip_mask.sum()
-            df['_daily_return'] = df['_daily_return'].clip(lower=-self.max_daily_return, upper=self.max_daily_return)
+            df['return'] = df['return'].clip(lower=-self.max_daily_return, upper=self.max_daily_return)
+
+        if 'close' in df.columns:
+            df['_daily_return'] = df.groupby('ticker')['close'].pct_change()
+            clip_mask = (df['_daily_return'] > self.max_daily_return) | (df['_daily_return'] < -self.max_daily_return)
+            out_report['daily_return_clipped'] += clip_mask.sum()
             df = df.drop(columns=['_daily_return'])
             
         return df, dict(out_report)
 
-    def _remove_stale_data(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict]:
-        """Remove tickers with:
-        - Identical close for > max_consecutive_identical consecutive days
-        - < min_trading_days total rows
-        - > max_missing_volume_pct % missing/zero volume
-        - Close price < min_price (penny stocks)"""
+    def _remove_stale_data(self, df: pd.DataFrame, point_in_time_mode: bool = True) -> Tuple[pd.DataFrame, Dict]:
+        """Causally filter stale or non-tradable rows without full-sample survivorship bias.
         
+        In point_in_time_mode (default):
+        - Masks per-row non-tradable bars (e.g. price < min_price at date t, zero volume at date t).
+        - Preserves historical bars of delisted or suspended companies up to their last trading date.
+        
+        If point_in_time_mode=False:
+        - Legacy ticker-level exclusion mode (for training dataset pre-filtering).
+        """
+        if point_in_time_mode:
+            removal_reasons = defaultdict(int)
+            # Minimum history filter
+            short_tickers = set()
+            for ticker, grp in df.groupby('ticker'):
+                if len(grp) < self.min_trading_days:
+                    short_tickers.add(ticker)
+            if short_tickers:
+                removal_reasons['insufficient_history_tickers'] = len(short_tickers)
+                df = df[~df['ticker'].isin(short_tickers)].copy()
+
+            # 1. Causal price filter (penny stock at date t)
+            penny_mask = (df['close'] < self.min_price) if 'close' in df.columns else pd.Series(False, index=df.index)
+            removal_reasons['penny_stock_rows'] = int(penny_mask.sum())
+            
+            # 2. Causal zero volume on active bar
+            zero_vol_mask = (df['volume'] <= 0) if 'volume' in df.columns else pd.Series(False, index=df.index)
+            removal_reasons['zero_volume_rows'] = int(zero_vol_mask.sum())
+            
+            # Filter rows without dropping entire ticker history
+            clean_df = df[~(penny_mask | zero_vol_mask)].copy()
+            return clean_df, dict(removal_reasons)
+
         tickers_to_remove = set()
         removal_reasons = defaultdict(list)
         
         for ticker, group in df.groupby('ticker'):
-            # Total rows
             if len(group) < self.min_trading_days:
                 tickers_to_remove.add(ticker)
                 removal_reasons[ticker].append('min_trading_days')
                 continue
                 
-            # Close price
             if group['close'].median() < self.min_price:
                 tickers_to_remove.add(ticker)
                 removal_reasons[ticker].append('min_price')
                 continue
                 
-            # Missing / zero volume
             vol_zero_pct = (group['volume'] <= 0).mean() * 100
             if vol_zero_pct > self.max_missing_volume_pct:
                 tickers_to_remove.add(ticker)
                 removal_reasons[ticker].append('missing_volume')
                 continue
                 
-            # Identical close
-            # shift diff == 0
             is_same = group['close'].diff() == 0
-            # group consecutive True
             consecutive = is_same.groupby((~is_same).cumsum()).sum()
             if consecutive.max() > self.max_consecutive_identical:
                 tickers_to_remove.add(ticker)
                 removal_reasons[ticker].append('consecutive_identical')
                 
         clean_df = df[~df['ticker'].isin(tickers_to_remove)].copy()
-        
         return clean_df, dict(removal_reasons)
 
     def _check_cross_sectional_consistency(self, df: pd.DataFrame) -> Dict:

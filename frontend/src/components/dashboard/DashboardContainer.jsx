@@ -5,6 +5,7 @@ import { Card, StatCard, SkeletonLoader } from '../ui';
 import { MarketOverview } from './MarketOverview';
 import { TopMovers } from './TopMovers';
 import { StockRecommendations } from './StockRecommendations';
+import PaperTradingOrders from './PaperTradingOrders';
 import { StockRow } from './StockRow';
 
 // We need the GlobalSearchInput logic. Since it's inside AuthenticatedApp.jsx and heavily tied,
@@ -105,6 +106,9 @@ export function DashboardContainer({
 
             {/* AI Stock Recommendations */}
             <StockRecommendations onTickerClick={handleOpenTicker} />
+
+            {/* AI Paper Trading Orders */}
+            <PaperTradingOrders />
 
             {/* Market Overview Widget */}
             <MarketOverview />

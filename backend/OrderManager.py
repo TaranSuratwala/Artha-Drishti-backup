@@ -91,8 +91,10 @@ class OrderManager:
                 return self._create_reject(order, msg)
                 
         # 6. Daily loss limit
-        # This requires tracking realized PnL throughout the day. Simplified here.
-        if self.daily_pnl <= -self.max_daily_loss:
+        # This requires tracking realized PnL throughout the day.
+        funds = self.broker.get_funds()
+        current_daily_pnl = funds.get("daily_realized_pnl", self.daily_pnl)
+        if current_daily_pnl <= -self.max_daily_loss:
             msg = f"Max daily loss limit reached (₹{self.max_daily_loss:,.2f}). Trading halted for the day."
             self._log_rejection(order, msg)
             return self._create_reject(order, msg)
@@ -145,16 +147,9 @@ class OrderManager:
                 "status": response.status.value,
                 "message": response.message
             }
-            log = []
-            if os.path.exists(self.audit_file):
-                with open(self.audit_file, 'r') as f:
-                    try:
-                        log = json.load(f)
-                    except:
-                        pass
-            log.append(entry)
-            with open(self.audit_file, 'w') as f:
-                json.dump(log, f, indent=4)
+            # Append atomically using jsonlines
+            with open(self.audit_file, 'a') as f:
+                f.write(json.dumps(entry) + '\n')
         except Exception as e:
             logger.error(f"Failed to write audit log: {e}")
 
@@ -189,9 +184,16 @@ class OrderManager:
         if not os.path.exists(self.audit_file):
             return []
         try:
+            log = []
             with open(self.audit_file, 'r') as f:
-                log = json.load(f)
-                return log[-limit:]
+                for line in f:
+                    if line.strip():
+                        # Try parsing as JSONL first, fallback to handling old JSON format if necessary
+                        try:
+                            log.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            pass
+            return log[-limit:]
         except Exception:
             return []
 

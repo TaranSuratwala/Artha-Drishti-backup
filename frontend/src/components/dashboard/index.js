@@ -5,3 +5,4 @@ export { PriceTargetsDashboard } from './PriceTargetsDashboard';
 export { StockRecommendations } from './StockRecommendations';
 export { BeginnerRiskSummary } from './BeginnerRiskSummary';
 export { DashboardContainer } from './DashboardContainer';
+export { default as PaperTradingOrders } from './PaperTradingOrders';

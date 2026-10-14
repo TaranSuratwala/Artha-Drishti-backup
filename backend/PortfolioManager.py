@@ -143,55 +143,136 @@ class PortfolioManager:
             data = {'transactions': [], 'holdings': {}}
             self._save_data(user_id, data)
 
+    def process_corporate_action(self, user_id, ticker, action_type, **kwargs):
+        """
+        Process a corporate action for a specific user's portfolio.
+        action_type: 'SPLIT', 'BONUS', or 'DIVIDEND'
+        """
+        import uuid
+        with self._user_locks[user_id]:
+            data = self._load_data(user_id)
+            if 'cash_balance' not in data:
+                data['cash_balance'] = 0.0
+                
+            ticker_upper = ticker.upper()
+            action_type_upper = action_type.upper()
+            
+            if action_type_upper == 'DIVIDEND':
+                dps = float(kwargs.get('dps', 0.0))
+                qty = data['holdings'].get(ticker_upper, {}).get('quantity', 0.0)
+                payout = qty * dps
+                data['cash_balance'] += payout
+                data['transactions'].append({
+                    'id': str(uuid.uuid4()),
+                    'ticker': ticker_upper,
+                    'type': 'DIVIDEND',
+                    'amount': payout,
+                    'date': datetime.now().isoformat()
+                })
+            elif action_type_upper in ['SPLIT', 'BONUS']:
+                ratio = float(kwargs.get('ratio', 1.0))
+                data['transactions'].append({
+                    'id': str(uuid.uuid4()),
+                    'ticker': ticker_upper,
+                    'type': action_type_upper,
+                    'ratio': ratio,
+                    'date': datetime.now().isoformat()
+                })
+                self._recalculate_holdings(data)
+            
+            self._save_data(user_id, data)
+
     def _recalculate_holdings(self, data):
         """Recalculate current holdings based on all transactions.
-
-        Transactions are sorted by date before processing so that backdated
-        entries produce correct average prices.
+        Uses FIFO accounting for precise Indian tax reporting (STCG/LTCG).
+        Handles splits and bonus issues dynamically.
         """
         holdings = {}
+        tax_events = []
 
         # Sort by date to ensure chronological processing
         sorted_transactions = sorted(data['transactions'], key=lambda t: t.get('date', ''))
 
         for t in sorted_transactions:
-            ticker = t['ticker']
-            qty = t['quantity']
-            price = t['price']
+            ticker = t['ticker'].upper()
+            tx_type = t['type']
+            date_str = t.get('date')
+            tx_date = datetime.fromisoformat(date_str) if date_str else datetime.now()
             
             if ticker not in holdings:
-                holdings[ticker] = {'quantity': 0.0, 'total_cost': 0.0, 'avg_price': 0.0}
+                holdings[ticker] = {'quantity': 0.0, 'lots': []}
             
             current = holdings[ticker]
             
-            if t['type'] == 'BUY':
+            if tx_type == 'BUY':
+                qty = float(t['quantity'])
+                price = float(t['price'])
                 current['quantity'] += qty
-                current['total_cost'] += qty * price
-            elif t['type'] == 'SELL':
-                if current['quantity'] > 0:
-                    # Reduce cost basis proportionally
-                    cost_per_share = current['total_cost'] / current['quantity']
-                    current['total_cost'] -= qty * cost_per_share
-                    current['quantity'] -= qty
+                current['lots'].append({'quantity': qty, 'price': price, 'date': tx_date.isoformat()})
                 
-            # Update average price
-            if current['quantity'] > 0:
-                current['avg_price'] = current['total_cost'] / current['quantity']
-            else:
-                current['avg_price'] = 0.0
-                current['total_cost'] = 0.0
+            elif tx_type == 'SELL':
+                qty = float(t['quantity'])
+                price = float(t['price'])
+                if current['quantity'] > 0:
+                    remaining_to_sell = qty
+                    current['quantity'] -= qty
+                    
+                    # FIFO consume lots
+                    while remaining_to_sell > 0.0001 and len(current['lots']) > 0:
+                        lot = current['lots'][0]
+                        lot_qty = float(lot['quantity'])
+                        lot_price = float(lot['price'])
+                        lot_date = datetime.fromisoformat(lot['date'])
+                        
+                        sell_qty = min(remaining_to_sell, lot_qty)
+                        
+                        # Calculate Tax Gain
+                        days_held = (tx_date - lot_date).days
+                        gain = (price - lot_price) * sell_qty
+                        is_ltcg = days_held >= 365
+                        
+                        tax_events.append({
+                            'ticker': ticker,
+                            'sell_date': tx_date.isoformat(),
+                            'buy_date': lot_date.isoformat(),
+                            'quantity': round(sell_qty, 4),
+                            'buy_price': round(lot_price, 2),
+                            'sell_price': round(price, 2),
+                            'gain': round(gain, 2),
+                            'tax_type': 'LTCG' if is_ltcg else 'STCG',
+                            'days_held': days_held
+                        })
+                        
+                        lot['quantity'] = lot_qty - sell_qty
+                        remaining_to_sell -= sell_qty
+                        
+                        if lot['quantity'] <= 0.0001:
+                            current['lots'].pop(0)
+
+            elif tx_type == 'SPLIT' or tx_type == 'BONUS':
+                ratio = float(t.get('ratio', 1.0))
+                # Multiply quantity, divide cost basis across all held lots
+                current['quantity'] *= ratio
+                for lot in current['lots']:
+                    lot['quantity'] *= ratio
+                    lot['price'] /= ratio
+
+            # DIVIDEND is handled externally for cash but ignored here as it doesn't change cost basis
         
         # Filter out closed positions (near zero)
-        data['holdings'] = {
-            k: {
-                'ticker': k,
-                'quantity': round(float(v['quantity']), 4),
-                'avg_price': round(float(v['avg_price']), 2),
-                'total_cost': round(float(v['total_cost']), 2)
-            }
-            for k, v in holdings.items() 
-            if v['quantity'] > 0.0001
-        }
+        data['tax_events'] = tax_events
+        data['holdings'] = {}
+        for k, v in holdings.items():
+            if v['quantity'] > 0.0001:
+                total_cost = sum(lot['quantity'] * lot['price'] for lot in v['lots'])
+                avg_price = total_cost / v['quantity'] if v['quantity'] > 0 else 0.0
+                data['holdings'][k] = {
+                    'ticker': k,
+                    'quantity': round(float(v['quantity']), 4),
+                    'avg_price': round(float(avg_price), 2),
+                    'total_cost': round(float(total_cost), 2),
+                    'lots': v['lots']
+                }
 
     def get_portfolio_summary(self, user_id, current_prices=None):
         """
@@ -228,6 +309,7 @@ class PortfolioManager:
             
         total_pnl = total_value - total_cost
         total_pnl_pct = (total_pnl / total_cost * 100) if total_cost > 0 else 0
+        cash_balance = data.get('cash_balance', 0.0)
         
         return {
             'holdings': holdings_list,
@@ -236,7 +318,9 @@ class PortfolioManager:
                 'total_cost': round(total_cost, 2),
                 'total_pnl': round(total_pnl, 2),
                 'total_pnl_pct': round(total_pnl_pct, 2),
-                'portfolio_count': len(holdings_list)
+                'portfolio_count': len(holdings_list),
+                'cash_balance': round(cash_balance, 2)
             },
-            'transactions': data['transactions']
+            'transactions': data.get('transactions', []),
+            'tax_events': data.get('tax_events', [])
         }

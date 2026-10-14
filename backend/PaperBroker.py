@@ -68,7 +68,7 @@ class PaperBroker(BrokerAdapter):
             logger.warning(f"Failed to get price from yfinance for {symbol}: {e}")
             
         # Last resort fallback to a random plausible price just so the backtest/demo works
-        return float(random.randint(100, 5000))
+        raise ValueError(f"Could not fetch live price for {symbol}. Order rejected.")
 
     def place_order(self, order: OrderRequest) -> OrderResponse:
         if not self._connected:
@@ -78,7 +78,10 @@ class PaperBroker(BrokerAdapter):
         placed_at = datetime.now()
         
         # Simulate price lookup and slippage
-        current_price = self._get_current_price(order.symbol)
+        try:
+            current_price = self._get_current_price(order.symbol)
+        except ValueError as e:
+            return OrderResponse(order_id, OrderStatus.REJECTED, str(e), order.symbol, order.side.value, order.quantity)
         
         if order.order_type == BrokerOrderType.LIMIT:
             if order.price is None:
@@ -94,15 +97,26 @@ class PaperBroker(BrokerAdapter):
                 # For simplicity here, we reject it for immediate feedback to agent
                 return OrderResponse(order_id, OrderStatus.REJECTED, "Limit price not met (simulated restriction)", order.symbol, order.side.value, order.quantity)
         else:
-            # Market order: Add 0.01% to 0.05% slippage
-            slippage_pct = random.uniform(0.0001, 0.0005)
+            # Market order: Add realistic slippage for paper trading (0.1% to 0.5%)
+            slippage_pct = random.uniform(0.001, 0.005)
             if order.side == OrderSide.BUY:
                 fill_price = current_price * (1 + slippage_pct)
             else:
                 fill_price = current_price * (1 - slippage_pct)
         
+        # Calculate NSE transaction costs
+        try:
+            from nse_cost_model import NSECostModel, Segment
+            cost_model = NSECostModel()
+            is_buy = order.side == OrderSide.BUY
+            segment = Segment.CASH_INTRADAY if getattr(order, 'product', None) and order.product.value == "MIS" else Segment.CASH_DELIVERY
+            txn_cost_data = cost_model.compute("BUY" if is_buy else "SELL", fill_price, order.quantity, segment)
+            txn_cost = txn_cost_data['total']
+        except ImportError:
+            txn_cost = 0.0
+
         # Check funds
-        cost = fill_price * order.quantity
+        cost = (fill_price * order.quantity) + txn_cost
         if order.side == OrderSide.BUY and cost > self.capital:
             return OrderResponse(order_id, OrderStatus.REJECTED, f"Insufficient funds. Required: ₹{cost:.2f}, Available: ₹{self.capital:.2f}", order.symbol, order.side.value, order.quantity)
             
@@ -110,7 +124,7 @@ class PaperBroker(BrokerAdapter):
         if order.side == OrderSide.BUY:
             self.capital -= cost
         else:
-            self.capital += cost
+            self.capital += (fill_price * order.quantity) - txn_cost
             
         # Create response
         resp = OrderResponse(
@@ -218,7 +232,8 @@ class PaperBroker(BrokerAdapter):
         return {
             "available_capital": self.capital,
             "used_margin": self.used_margin,
-            "total_capital": self.capital + self.used_margin
+            "total_capital": self.capital + self.used_margin,
+            "daily_realized_pnl": self.capital - self.initial_capital  # Simplified for paper broker
         }
 
     def get_ltp(self, symbols: List[str]) -> Dict[str, float]:
@@ -283,17 +298,8 @@ class PaperBroker(BrokerAdapter):
                 "status": order.status.value,
                 "time": order.placed_at.isoformat() if order.placed_at else datetime.now().isoformat()
             }
-            # Read existing
-            log = []
-            if os.path.exists(self.audit_file):
-                with open(self.audit_file, 'r') as f:
-                    try:
-                        log = json.load(f)
-                    except:
-                        pass
-            # Append and save
-            log.append(entry)
-            with open(self.audit_file, 'w') as f:
-                json.dump(log, f, indent=4)
+            # Append atomically using jsonlines
+            with open(self.audit_file, 'a') as f:
+                f.write(json.dumps(entry) + '\n')
         except Exception as e:
             logger.error(f"Failed to write paper trade audit log: {e}")

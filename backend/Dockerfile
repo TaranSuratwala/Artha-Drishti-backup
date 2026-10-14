@@ -1,33 +1,38 @@
-# GenAI Stock Market Intelligence System - Backend
+# Hardened Dockerfile
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
 FROM python:3.11-slim
 
-# Set working directory
+# Install runtime dependencies (e.g., libpq5 for psycopg2)
+RUN apt-get update && apt-get install -y libpq5 curl && rm -rf /var/lib/apt/lists/*
+
+# Non-root user
+RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
+
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Copy only installed packages
+COPY --from=builder /install /usr/local
 
-# Copy requirements first for better caching
-COPY requirements.txt .
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
+# Copy application code (respects .dockerignore)
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p saved_models logs unified_models unified_plots unified_metrics
+# Create directories with correct ownership
+RUN mkdir -p saved_models logs unified_models unified_plots unified_metrics data \
+    && chown -R appuser:appuser /app
 
-# Expose port
+# Drop to non-root
+USER appuser
+
 EXPOSE 5000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:5000/api/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/health')" || exit 1
 
-# Run with gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--threads", "2", "application:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--threads", "2", \
+     "--timeout", "120", "--graceful-timeout", "30", "--max-requests", "1000", \
+     "--max-requests-jitter", "50", "application:app"]

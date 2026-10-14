@@ -71,7 +71,11 @@ def refresh_feats():
     return True                                    # views are live; hook for materialised feature tables
 
 def _load_recent(n=320):
-    q = text("""SELECT ticker,date,open,high,low,close,volume,adj_close FROM nse_stocks
+    q = text("""SELECT ticker,date,open,high,low,close,volume,adj_close,
+                       COALESCE(delivery_qty, 0) AS delivery_qty,
+                       COALESCE(delivery_percentage, 0.0) AS delivery_percentage,
+                       COALESCE(traded_qty, volume) AS traded_qty
+                FROM nse_stocks
                 WHERE date >= (SELECT max(date) FROM nse_stocks) - :n * interval '1 day' ORDER BY ticker,date""")
     with eng.connect() as c:
         return pd.read_sql(q, c, params={'n': int(n * 1.6)})
