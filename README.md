@@ -1,128 +1,136 @@
 # Artha Drishti
 
-<p align="center">
-  <img src="https://capsule-render.vercel.app/api?type=rect&color=0:0f172a,100:0b1b2b&height=120&section=header&text=Artha-Drishti&fontSize=36&fontColor=F8FAFC&fontAlignY=60" alt="Artha-Drishti banner" />
-</p>
+Artha Drishti is an AI-powered stock market intelligence platform that combines screening, forecasting, and backtesting into one workflow.  
+It provides a React frontend for analysis and a Flask backend for data pipelines, strategy engines, and model inference.
 
-<p align="center">
-  <img src="https://img.shields.io/github/last-commit/TaranSuratwala/Artha-Drishti?style=flat-square" alt="Last commit" />
-  <img src="https://img.shields.io/github/languages/top/TaranSuratwala/Artha-Drishti?style=flat-square" alt="Top language" />
-  <img src="https://img.shields.io/github/repo-size/TaranSuratwala/Artha-Drishti?style=flat-square" alt="Repo size" />
-</p>
+## Table of Contents
 
-<p align="center">
-  <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python" />
-  <img src="https://img.shields.io/badge/react-18-61dafb" alt="React" />
-  <img src="https://img.shields.io/badge/vite-4.x-646cff" alt="Vite" />
-  <img src="https://img.shields.io/badge/license-MIT-green" alt="License" />
-</p>
+- [Overview](#overview)
+- [Core Capabilities](#core-capabilities)
+- [Technology Stack](#technology-stack)
+- [Repository Structure](#repository-structure)
+- [Getting Started](#getting-started)
+- [Configuration](#configuration)
+- [Key API Endpoints](#key-api-endpoints)
+- [Additional Documentation](#additional-documentation)
+- [License](#license)
 
-Artha Drishti is a stock market intelligence platform that brings screening, prediction, and backtesting into a single workflow. It pairs a modern React dashboard with a Flask API to deliver data, models, and strategy evaluation in one place.
+## Overview
 
-## Product Highlights
+The platform is designed to support end-to-end market analysis:
 
-- Multi-strategy stock screening covering momentum, Piotroski, swing, breakout, value, and custom logic
-- LSTM + attention predictions with batch and per-ticker endpoints
-- Historical backtesting with performance metrics and strategy comparison
-- Scheduler-driven data pipeline with PostgreSQL and TimescaleDB, optional Redis caching
-- Portfolio watchlists, charts, and summary dashboards for faster review
+- ingest and maintain stock market data,
+- run multi-strategy screening,
+- generate model-driven predictions,
+- evaluate ideas with historical backtesting,
+- monitor results from a unified dashboard.
 
-## System Overview
+## Core Capabilities
 
-- Frontend: React 18 + Vite single-page application
-- Backend: Flask API, scheduler, ML pipeline, and screener engine
-- Data: PostgreSQL 14+ with TimescaleDB extension; optional Redis cache
-- ML: PyTorch models with pretrained artifacts
+- **Multi-strategy screening**: Momentum, Piotroski, Swing, Breakout, Value, and Custom logic.
+- **AI prediction engine**: LSTM + attention-based forecasting workflows.
+- **Backtesting engine**: Strategy performance evaluation over historical windows.
+- **Data and scheduling layer**: Automated pipelines with scheduler-driven updates.
+- **Interactive frontend**: Dashboard, watchlist, charting, and portfolio views.
 
-## Run Locally
+## Technology Stack
 
-1. Start the backend API:
-   ```bash
-   cd backend
-   python -m venv venv
-   venv\Scripts\activate
-   pip install -r requirements.txt
-   copy .env.example .env
-   python application.py
-   ```
-2. Start the frontend:
-   ```bash
-   cd frontend
-   npm install
-   npm run dev
-   ```
-3. Open the app at http://localhost:5173
+### Backend
+- Python 3.9+
+- Flask API
+- PostgreSQL + TimescaleDB
+- Optional Redis caching
 
-Optional check: `GET http://localhost:5000/api/health`
+### Frontend
+- React 18
+- Vite
+- Zustand state management
+- Plotly-based charting
+
+## Repository Structure
+
+```text
+Artha-Drishti-backup/
+├── backend/              # Flask API, scheduler, screening, ML, backtesting
+│   ├── application.py    # Backend entrypoint
+│   └── README.md         # Backend setup and API details
+├── frontend/             # React application
+│   ├── src/              # Components, pages, hooks, services
+│   └── README.md         # Frontend setup and development notes
+├── docs/                 # Static assets for site/theme
+└── README.md             # Project overview (this file)
+```
+
+## Getting Started
+
+### 1) Start the Backend
+
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate    # Linux/macOS
+# venv\Scripts\activate     # Windows
+pip install -r requirements.txt
+cp .env.example .env        # Linux/macOS
+# copy .env.example .env    # Windows
+python application.py
+```
+
+Backend health check:
+
+```bash
+curl http://localhost:5000/api/health
+```
+
+### 2) Start the Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open the app at `http://localhost:5173`.
 
 ## Configuration
 
-### Backend (.env)
+### Backend Configuration
 
-Copy [backend/.env.example](backend/.env.example) to `backend/.env` and update values as needed.
-
-Key variables:
+Copy `backend/.env.example` to `backend/.env` and configure at minimum:
 
 - `DATABASE_URL`
-- `CORS_ORIGINS`
-- `APP_HOST`, `APP_PORT`, `APP_ENV`, `APP_DEBUG`, `APP_USE_RELOADER`, `APP_THREADED`
+- `APP_HOST`, `APP_PORT`, `APP_ENV`
 - `SECRET_KEY`, `JWT_SECRET_KEY`
-- `NEWSAPI_KEY`, `FINNHUB_KEY`, `ALPHAVANTAGE_KEY` (optional)
-- `SCHEDULER_ENABLED`, `SCHEDULER_HOUR`, `SCHEDULER_MINUTE`, `SCHEDULER_AUTO_START`
-- `SCHEDULER_AUTO_CATCHUP`, `SCHEDULER_AUTO_TRAIN`, `SCHEDULER_IN_WEB_WORKER`
+- `CORS_ORIGINS`
+- scheduler flags such as `SCHEDULER_ENABLED` and `SCHEDULER_AUTO_TRAIN`
 
-### Frontend (.env.local)
+Optional keys for external news and market data providers are also supported in the same file.
 
-Copy [frontend/.env.example](frontend/.env.example) to `frontend/.env.local` and set:
+### Frontend Configuration
 
-- `VITE_GOOGLE_CLIENT_ID`
-- `VITE_API_BASE_URL` (leave empty for same-origin proxy)
+Copy `frontend/.env.example` to `frontend/.env.local` and set:
 
-## API Highlights
+- `VITE_API_BASE_URL`
+- `VITE_GOOGLE_CLIENT_ID` (if Google auth is enabled)
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/health` | GET | Health check |
+## Key API Endpoints
+
+| Endpoint | Method | Purpose |
+| --- | --- | --- |
+| `/api/health` | GET | Service health check |
+| `/api/stocks` | GET | Latest stock data |
+| `/api/history/<ticker>` | GET | Historical ticker data |
 | `/api/screen/momentum` | POST | Momentum screening |
 | `/api/screen/piotroski` | POST | Piotroski screening |
-| `/api/predict/<ticker>` | POST | Price prediction |
-| `/api/train/<ticker>` | POST | Train/update model |
-| `/api/backtest/<strategy>` | POST | Strategy backtest |
+| `/api/predict/<ticker>` | POST | Model inference for a ticker |
+| `/api/train/<ticker>` | POST | Trigger training/update workflow |
+| `/api/backtest/<strategy>` | POST | Strategy backtesting |
 
-## Project Structure
+## Additional Documentation
 
-```
-Project sem-6/
-├── backend/                    # Flask API
-│   ├── application.py          # Main server
-│   ├── IntegratedPostGreSQL.py # NSE data pipeline
-│   ├── MLPredictor.py          # AI prediction engine
-│   ├── StockScreener.py        # Multi-strategy screener
-│   ├── FeatureEngineering.py   # Indicators
-│   ├── Backtesting.py          # Strategy backtesting
-│   ├── config.py               # Configuration
-│   ├── requirements.txt        # Python dependencies
-│   └── README.md               # Backend docs
-│
-└── frontend/                   # React + Vite SPA
-    ├── src/
-    │   ├── components/         # UI and chart components
-    │   ├── services/           # API service layer
-    │   ├── styles/             # Design system
-    │   └── App.jsx             # Main application
-    ├── package.json            # Frontend dependencies
-    ├── vite.config.js          # Vite configuration
-    └── README.md               # Frontend docs
-```
-
-## Documentation
-
-- Backend details: [backend/README.md](backend/README.md)
-- Frontend details: [frontend/README.md](frontend/README.md)
-
-## Site Theme
-
-The GitHub Pages theme lives in `docs/`. Enable Pages to serve from the `/docs` folder.
+- Backend: [`backend/README.md`](backend/README.md)
+- Frontend: [`frontend/README.md`](frontend/README.md)
+- Quick reference: [`QUICK_REFERENCE.md`](QUICK_REFERENCE.md)
 
 ## License
 
